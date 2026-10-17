@@ -108,7 +108,9 @@ a { color: var(--brand-mark); }
 .bubble.bot { align-self: flex-start; background: var(--bubble-bot); border-bottom-left-radius: 4px; }
 .bubble.error { align-self: flex-start; border: 1px dashed var(--border); color: var(--muted); font-style: italic; }
 mark { background: var(--sev-bg); color: var(--sev-text); font-weight: 700; border-radius: 3px; padding: 0 2px; outline: 1px solid var(--sev-text); }
-.detail { border-left: 3px solid var(--sev-text); padding: 4px 0 4px 12px; margin-top: 18px; }
+.failed-checks { list-style: none; margin: 0; padding: 0; }
+.failed-checks li { border-left: 3px solid var(--sev-text); padding: 4px 0 4px 12px; margin-bottom: 8px; }
+.failed-checks .pill { margin-right: 4px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .copy-row { margin-top: 18px; }
 
@@ -210,7 +212,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
       <div class="bubble {{ b.role }}"><span class="who">{{ "Customer" if b.role == "customer" else "Bot" }}</span>{{ b.html }}</div>
       {% endfor %}
     </div>
-    <p class="detail">{{ f.detail }}</p>
+    <div class="section-label">{{ "Checks that failed" if f.checks | length > 1 else "Check that failed" }}</div>
+    <ul class="failed-checks">
+      {% for c in f.checks %}
+      <li class="sev-{{ c.severity }}"><span class="pill">{{ c.severity }}</span> <strong>{{ c.label }}.</strong> {{ c.detail }}</li>
+      {% endfor %}
+    </ul>
 
     <div class="two-col">
       <div>

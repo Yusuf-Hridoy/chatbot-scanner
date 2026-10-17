@@ -9,47 +9,62 @@ from pathlib import Path
 from chatbot_audit.attacks.attack_loader import load_attacks
 from chatbot_audit.checks.rule_checks import run_check
 from chatbot_audit.config_loader import load_client_config
-from chatbot_audit.data_models import SEVERITY_ORDER, Exchange, Finding, RunInfo, Verdict
+from chatbot_audit.data_models import SEVERITY_ORDER, FailedCheck, Finding, RunInfo, Verdict
 from chatbot_audit.pipeline.run_folder import (
-    EXCHANGES_FILE,
     FINDINGS_FILE,
     RUN_INFO_FILE,
     VERDICTS_FILE,
     append_jsonl,
     read_json,
-    read_jsonl,
+    read_latest_exchanges,
     require_run_dir,
+    resolve_config_path,
     write_json,
 )
 
 
 def build_findings(verdicts: list[Verdict], titles: dict[str, str]) -> list[Finding]:
-    """One auto-confirmed finding per failed verdict, sorted by severity then attack id."""
-    findings = [
-        Finding(
-            fingerprint=f"{verdict.attack_id}::{verdict.check_type}",
-            attack_id=verdict.attack_id,
-            check_type=verdict.check_type,
-            severity=verdict.severity,
-            title=titles.get(verdict.attack_id, verdict.attack_id),
-            detail=verdict.detail,
-            matched_text=verdict.matched_text,
-            turn_index=verdict.turn_index,
-            status="auto_confirmed",
+    """One auto-confirmed finding per attack that has failed checks.
+
+    The finding lists every failed check and takes the highest severity among them.
+    Sorted by severity (critical first), then attack id.
+    """
+    failed_by_attack: dict[str, list[FailedCheck]] = {}
+    for verdict in verdicts:
+        if verdict.verdict != "fail":
+            continue
+        failed_by_attack.setdefault(verdict.attack_id, []).append(
+            FailedCheck(
+                fingerprint=f"{verdict.attack_id}::{verdict.check_type}",
+                check_type=verdict.check_type,
+                severity=verdict.severity,
+                detail=verdict.detail,
+                matched_text=verdict.matched_text,
+                turn_index=verdict.turn_index,
+            )
         )
-        for verdict in verdicts
-        if verdict.verdict == "fail"
-    ]
-    return sorted(findings, key=lambda f: (SEVERITY_ORDER[f.severity], f.attack_id, f.check_type))
+    findings = []
+    for attack_id, checks in failed_by_attack.items():
+        checks.sort(key=lambda c: (SEVERITY_ORDER[c.severity], c.check_type))
+        findings.append(
+            Finding(
+                attack_id=attack_id,
+                severity=checks[0].severity,
+                title=titles.get(attack_id, attack_id),
+                checks=checks,
+                status="auto_confirmed",
+            )
+        )
+    return sorted(findings, key=lambda f: (SEVERITY_ORDER[f.severity], f.attack_id))
 
 
 def evaluate_run(run_dir: Path, echo: Callable[[str], None] = print) -> list[Finding]:
     """Evaluate a run folder: writes verdicts.jsonl and findings.json, prints a summary."""
     run_dir = require_run_dir(run_dir)
     info = RunInfo.model_validate(read_json(run_dir / RUN_INFO_FILE))
-    config = load_client_config(Path(info.config_path))
+    config = load_client_config(resolve_config_path(run_dir, info))
     attacks = {attack.id: attack for attack in load_attacks(Path(info.attack_pack_dir))}
-    exchanges = read_jsonl(run_dir / EXCHANGES_FILE, Exchange)
+    exchanges = read_latest_exchanges(run_dir)
 
     verdicts: list[Verdict] = []
     for exchange in exchanges:
@@ -75,7 +90,7 @@ def evaluate_run(run_dir: Path, echo: Callable[[str], None] = print) -> list[Fin
     echo(f"  {'fail':<14}{outcome_counts['fail']:>4}")
     echo(f"  {'inconclusive':<14}{outcome_counts['inconclusive']:>4}")
     echo(f"  {'skipped':<14}{outcome_counts['skipped']:>4}")
-    echo(f"Findings: {len(findings)}")
+    echo(f"Findings (one per attack): {len(findings)}")
     for severity in SEVERITY_ORDER:
         echo(f"  {severity:<14}{severity_counts[severity]:>4}")
     return findings

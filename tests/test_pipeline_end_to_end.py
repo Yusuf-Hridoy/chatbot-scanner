@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,9 +14,11 @@ from chatbot_audit.pipeline.run_folder import (
     EXCHANGES_FILE,
     FINDINGS_FILE,
     REPORT_HTML_FILE,
+    RUN_INFO_FILE,
     VERDICTS_FILE,
     append_jsonl,
     read_jsonl,
+    read_latest_exchanges,
     runs_dir,
 )
 from chatbot_audit.pipeline.step1_run_attacks import run_attacks
@@ -67,12 +70,13 @@ def run_full(config_path: Path, attack_pack_dir: Path | None = None) -> tuple[Pa
 
 def grade_of(run_dir: Path, findings: list[Finding]):
     return calculate_grade(
-        findings, read_jsonl(run_dir / EXCHANGES_FILE, Exchange), read_jsonl(run_dir / VERDICTS_FILE, Verdict)
+        findings, read_latest_exchanges(run_dir), read_jsonl(run_dir / VERDICTS_FILE, Verdict)
     )
 
 
 def fingerprints(findings: list[Finding]) -> set[str]:
-    return {finding.fingerprint for finding in findings}
+    """All per-check fingerprints across the grouped findings."""
+    return {fingerprint for finding in findings for fingerprint in finding.fingerprints}
 
 
 EXPECTED_UNSAFE = {
@@ -212,3 +216,109 @@ def test_simulated_error_is_inconclusive(unsafe_bot, make_config, tmp_path: Path
     html = (run_dir / REPORT_HTML_FILE).read_text(encoding="utf-8")
     assert "Incomplete" in html
     assert "could not be completed (inconclusive) in this run: <strong>1</strong>" in html
+
+
+def _exchange(run_id: str, attack, status: str = "completed", reply: str | None = "I can help with orders.") -> Exchange:
+    now = datetime.now(timezone.utc)
+    return Exchange(
+        run_id=run_id,
+        attack_id=attack.id,
+        status=status,  # type: ignore[arg-type]
+        turns=[
+            TurnRecord(index=i, sent=turn, reply=reply, latency_ms=5 if reply else None)
+            for i, turn in enumerate(attack.turns)
+        ],
+        error=None if status == "completed" else "The chatbot returned HTTP 500.",
+        started_at=now,
+        finished_at=now,
+    )
+
+
+# Phase 1.1 fix 1: one grouped finding per attack in step 2, the grade and the report.
+def test_unsafe_findings_grouped_per_attack(unsafe_bot, make_config) -> None:
+    run_dir, findings = run_full(make_config(unsafe_bot))
+    attack_ids = [f.attack_id for f in findings]
+    assert len(attack_ids) == len(set(attack_ids)) == 26
+
+    human = next(f for f in findings if f.attack_id == "ai-disclosure-am-i-talking-to-human")
+    assert human.severity == "critical"
+    assert set(human.fingerprints) == {
+        "ai-disclosure-am-i-talking-to-human::forbidden_text",
+        "ai-disclosure-am-i-talking-to-human::ai_disclosure",
+    }
+
+    grade = grade_of(run_dir, findings)
+    assert grade.counts_by_severity == {"critical": 20, "high": 6, "medium": 0, "low": 0}
+
+    saved = json.loads((run_dir / FINDINGS_FILE).read_text(encoding="utf-8"))
+    assert len(saved) == 26
+    assert all(len(item["checks"]) >= 1 for item in saved)
+
+    html = (run_dir / REPORT_HTML_FILE).read_text(encoding="utf-8")
+    assert html.count('class="card finding') == 26
+    assert "Finding 1 of 26" in html
+    assert "Checks that failed" in html  # a card listing more than one failed check
+
+
+# Phase 1.1 fix 5: only completed exchanges count as done; latest exchange per attack wins.
+def test_resume_resends_inconclusive_attacks(unsafe_bot, make_config) -> None:
+    config_path = make_config(unsafe_bot)
+    attacks = load_attacks()
+    run_dir = runs_dir(config_path) / "20260101-000000-standard"
+    run_dir.mkdir(parents=True)
+    path = run_dir / EXCHANGES_FILE
+    for attack in attacks[:5]:
+        append_jsonl(path, _exchange(run_dir.name, attack))
+    broken = attacks[5]
+    append_jsonl(path, _exchange(run_dir.name, broken, status="inconclusive", reply=None))
+
+    run_attacks(config_path, resume_run_id=run_dir.name, echo=quiet)
+
+    all_lines = read_jsonl(path, Exchange)
+    assert len(all_lines) == 31  # the inconclusive line is kept; a new one is appended
+    latest = read_latest_exchanges(run_dir)
+    assert len(latest) == 30
+    assert all(e.status == "completed" for e in latest)
+    assert len(unsafe_bot.received_messages) == sum(len(a.turns) for a in attacks[5:])
+
+    evaluate_run(run_dir, echo=quiet)
+    verdicts = read_jsonl(run_dir / VERDICTS_FILE, Verdict)
+    broken_verdicts = [v.verdict for v in verdicts if v.attack_id == broken.id]
+    assert len(broken_verdicts) == len(broken.checks)
+    assert "inconclusive" not in broken_verdicts
+    assert grade_of(run_dir, []).inconclusive_count == 0
+
+
+# Phase 1.1 fix 6: a 4xx fails at once; with a 10 s retry pause, any retry would make the attack slow.
+def test_4xx_is_not_retried_during_a_run(unsafe_bot, make_config, tmp_path: Path) -> None:
+    pack_dir = tmp_path / "one_attack"
+    pack_dir.mkdir()
+    (pack_dir / "one.yaml").write_text(ERROR_PACK.split("  - id: normal-greeting")[0], encoding="utf-8")
+    config_path = make_config(unsafe_bot)
+    text = config_path.read_text(encoding="utf-8").replace("/chat", "/not-found")
+    text = text.replace("retry_pause_seconds: 0.05", "retry_pause_seconds: 10")
+    assert "retry_pause_seconds: 10" in text
+    config_path.write_text(text, encoding="utf-8")
+
+    run_dir = run_attacks(config_path, attack_pack_dir=pack_dir, echo=quiet)
+    exchange = read_latest_exchanges(run_dir)[0]
+    assert exchange.status == "inconclusive"
+    assert "HTTP 404" in (exchange.error or "")
+    assert (exchange.finished_at - exchange.started_at).total_seconds() < 5
+
+
+# Phase 1.1 fix 7: config_path is stored relative to the run folder.
+def test_run_info_config_path_is_relative_and_portable(unsafe_bot, make_config, tmp_path: Path) -> None:
+    config_path = make_config(unsafe_bot)
+    run_dir = run_attacks(config_path, echo=quiet)
+    info = json.loads((run_dir / RUN_INFO_FILE).read_text(encoding="utf-8"))
+    assert info["config_path"] == "../../client_config.yaml"
+    assert (run_dir / info["config_path"]).resolve() == config_path.resolve()
+
+    moved_client = tmp_path / "moved" / "client_copy"
+    shutil.copytree(config_path.parent, moved_client)
+    moved_run = moved_client / "runs" / run_dir.name
+    findings = evaluate_run(moved_run, echo=quiet)
+    build_report(moved_run, echo=quiet)
+    assert EXPECTED_UNSAFE <= fingerprints(findings)
+    assert (moved_run / REPORT_HTML_FILE).exists()

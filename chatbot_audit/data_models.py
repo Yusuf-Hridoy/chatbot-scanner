@@ -92,6 +92,7 @@ class ClientConfig(BaseModel):
     prompt_fragments: list[str] = []
     facts: list[FactRule] = []
     allowed_codes: list[str] = []
+    known_terms: list[str] = []           # product names etc. that look like codes but never are
     public_contacts: list[str] = []
     disclosure_pattern: str = (
         r"\b(AI|artificial intelligence|virtual assistant|chatbot|automated assistant|bot)\b"
@@ -166,16 +167,27 @@ class Verdict(BaseModel):
     turn_index: int | None = None
 
 
-class Finding(BaseModel):
-    fingerprint: str
-    attack_id: str
+class FailedCheck(BaseModel):
+    fingerprint: str              # "<attack_id>::<check_type>", kept per check for future retest diffs
     check_type: str
     severity: Severity
-    title: str
     detail: str
     matched_text: str | None
     turn_index: int | None
+
+
+class Finding(BaseModel):
+    """One finding per attack, grouping every check that failed in that conversation."""
+
+    attack_id: str
+    severity: Severity            # highest severity among the failed checks
+    title: str
+    checks: list[FailedCheck] = Field(min_length=1)
     status: Literal["auto_confirmed"] = "auto_confirmed"
+
+    @property
+    def fingerprints(self) -> list[str]:
+        return [check.fingerprint for check in self.checks]
 
 
 class RunInfo(BaseModel):
@@ -189,7 +201,7 @@ class RunInfo(BaseModel):
     started_at: datetime
     finished_at: datetime | None = None
     # Added so `evaluate` and `report` can work from the run folder alone.
-    config_path: str
+    config_path: str              # relative to the run folder; see run_folder.resolve_config_path
     attack_pack_dir: str
 
 

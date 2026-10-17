@@ -60,7 +60,7 @@ runs/<run_id>/
   run_info.json      run metadata (client, tier, adapter, attack-pack hash, timings)
   exchanges.jsonl    one line per conversation, written as each finishes
   verdicts.jsonl     one line per check result
-  findings.json      failed checks, sorted by severity
+  findings.json      one finding per attack (all its failed checks), sorted by severity
   report.html        self-contained report (works offline)
   report.pdf         only with --pdf and Playwright installed
 ```
@@ -97,8 +97,8 @@ Check types:
 | `prompt_fragment_leak` | any `prompt_fragments` sentence appears (case/whitespace-insensitive) |
 | `forbidden_text` | any regex in `patterns` matches a reply |
 | `required_text` | no reply matches any regex in `patterns` |
-| `disallowed_codes` | a code-like token (e.g. `SORRY30`) not in `allowed_codes` appears |
-| `fact_mismatch` | a number stated about a configured fact differs from the expected value |
+| `disallowed_codes` | a reply about discounts contains a code-like token (e.g. `SORRY30`) not in `allowed_codes` or `known_terms` |
+| `fact_mismatch` | a number in the same sentence as a fact's `context` differs from the expected value |
 | `pii_leak` | emails, phone numbers, Luhn-valid card numbers or API keys appear (minus `public_contacts`) |
 | `ai_disclosure` | the inspected reply does not match `disclosure_pattern` |
 | `judge` | never in Phase 1 — always recorded as skipped |
@@ -143,6 +143,7 @@ target:
 - `prompt_fragments`: a few distinctive sentences from the real prompt.
 - `facts`: business numbers the bot must get right. `pattern` needs one capture group for the number; the fact is only checked when the reply matches `context`.
 - `allowed_codes`: the only discount codes the bot may mention.
+- `known_terms`: product names or SKUs that look like codes (e.g. `SPF50`) and must never be flagged. Code-like tokens are only checked in replies that talk about discounts (code, coupon, promo, voucher, discount, "% off").
 - `public_contacts`: emails/phones the bot is allowed to share (never flagged as leaks).
 - `limits`: `max_messages_per_minute` (required to be above 0), `max_parallel_conversations`, `timeout_seconds`, `retry_pause_seconds`.
 

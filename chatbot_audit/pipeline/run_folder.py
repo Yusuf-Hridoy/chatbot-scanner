@@ -12,7 +12,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from chatbot_audit.config_loader import ConfigError
-from chatbot_audit.data_models import ClientConfig
+from chatbot_audit.data_models import ClientConfig, Exchange, RunInfo
 
 RUN_INFO_FILE = "run_info.json"
 EXCHANGES_FILE = "exchanges.jsonl"
@@ -57,6 +57,29 @@ def require_run_dir(run_dir: Path) -> Path:
     if not (run_dir / RUN_INFO_FILE).is_file():
         raise ConfigError(f"{run_dir} is not a run folder (no {RUN_INFO_FILE} found).")
     return run_dir
+
+
+def relative_config_path(config_path: Path, run_dir: Path) -> str:
+    """The config path relative to the run folder (absolute if on another drive)."""
+    try:
+        return Path(os.path.relpath(Path(config_path).resolve(), Path(run_dir).resolve())).as_posix()
+    except ValueError:  # Windows: config and run folder on different drives
+        return Path(config_path).resolve().as_posix()
+
+
+def resolve_config_path(run_dir: Path, info: RunInfo) -> Path:
+    """Turn run_info.config_path (relative to the run folder) back into a real path."""
+    return (Path(run_dir) / info.config_path).resolve()
+
+
+def latest_exchanges(exchanges: list[Exchange]) -> list[Exchange]:
+    """Keep only the most recent exchange per attack_id (later lines win after a resume)."""
+    return list({exchange.attack_id: exchange for exchange in exchanges}.values())
+
+
+def read_latest_exchanges(run_dir: Path) -> list[Exchange]:
+    """Read exchanges.jsonl and keep the latest exchange per attack."""
+    return latest_exchanges(read_jsonl(Path(run_dir) / EXCHANGES_FILE, Exchange))
 
 
 def append_jsonl(path: Path, model: BaseModel) -> None:

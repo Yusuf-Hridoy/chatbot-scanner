@@ -16,7 +16,6 @@ from chatbot_audit.attacks.attack_loader import load_attacks
 from chatbot_audit.data_models import Attack, Exchange, Finding, Grade, RunInfo, Verdict
 from chatbot_audit.pipeline.grade_calculator import calculate_grade
 from chatbot_audit.pipeline.run_folder import (
-    EXCHANGES_FILE,
     FINDINGS_FILE,
     REPORT_HTML_FILE,
     REPORT_PDF_FILE,
@@ -24,6 +23,7 @@ from chatbot_audit.pipeline.run_folder import (
     VERDICTS_FILE,
     read_json,
     read_jsonl,
+    read_latest_exchanges,
     require_run_dir,
 )
 
@@ -35,19 +35,32 @@ CATEGORY_NAMES = {
     "ai_disclosure": "Discloses that it is an AI",
     "data_leak": "Protects customer data and secrets",
 }
+CHECK_LABELS = {
+    "canary_leak": "Secret marker leaked",
+    "prompt_fragment_leak": "Instruction text leaked",
+    "forbidden_text": "Forbidden statement",
+    "required_text": "Required information missing",
+    "disallowed_codes": "Unapproved discount code",
+    "fact_mismatch": "Wrong policy fact",
+    "pii_leak": "Private data exposed",
+    "ai_disclosure": "No AI disclosure",
+    "judge": "Judge check",
+}
 NEXT_STEP_FINDINGS = "Forward this report to your developer. Most fixes are changes to the bot's instructions."
 NEXT_STEP_CLEAN = (
     "No issues found in this run. Retest after any change to your bot's model, instructions or knowledge base."
 )
 
 
-def highlight(text: str, matched: str | None) -> Markup:
-    """HTML-escape untrusted text, then wrap every occurrence of `matched` in <mark>."""
-    if not matched:
+def highlight(text: str, terms: list[str]) -> Markup:
+    """HTML-escape untrusted text, then wrap every occurrence of each term in <mark>."""
+    terms = sorted({term for term in terms if term}, key=len, reverse=True)
+    if not terms:
         return Markup(escape(text))
+    pattern = "|".join(re.escape(term) for term in terms)
     parts: list[Markup] = []
     position = 0
-    for match in re.finditer(re.escape(matched), text, re.IGNORECASE):
+    for match in re.finditer(pattern, text, re.IGNORECASE):
         parts.append(escape(text[position : match.start()]))
         parts.append(Markup("<mark>") + escape(match.group(0)) + Markup("</mark>"))
         position = match.end()
@@ -62,8 +75,12 @@ def _transcript(exchange: Exchange | None, finding: Finding) -> list[dict[str, A
     for turn in exchange.turns:
         bubbles.append({"role": "customer", "html": escape(turn.sent)})
         if turn.reply is not None:
-            marked = finding.turn_index is None or finding.turn_index == turn.index
-            bubbles.append({"role": "bot", "html": highlight(turn.reply, finding.matched_text if marked else None)})
+            terms = [
+                check.matched_text
+                for check in finding.checks
+                if check.matched_text and (check.turn_index is None or check.turn_index == turn.index)
+            ]
+            bubbles.append({"role": "bot", "html": highlight(turn.reply, terms)})
         elif turn.error:
             bubbles.append({"role": "error", "html": escape(f"No reply: {turn.error}")})
     return bubbles
@@ -86,7 +103,7 @@ def _passed_by_category(
 def render_report_html(run_dir: Path, pdf_link: bool) -> tuple[str, Grade]:
     """Render report.html for a run folder and return (html, grade)."""
     info = RunInfo.model_validate(read_json(run_dir / RUN_INFO_FILE))
-    exchanges = read_jsonl(run_dir / EXCHANGES_FILE, Exchange)
+    exchanges = read_latest_exchanges(run_dir)
     verdicts = read_jsonl(run_dir / VERDICTS_FILE, Verdict)
     findings = [Finding.model_validate(item) for item in read_json(run_dir / FINDINGS_FILE)]
     attacks = {attack.id: attack for attack in load_attacks(Path(info.attack_pack_dir))}
@@ -103,7 +120,14 @@ def render_report_html(run_dir: Path, pdf_link: bool) -> tuple[str, Grade]:
                 "severity": finding.severity,
                 "title": finding.title,
                 "owasp": attack.owasp if attack else "",
-                "detail": finding.detail,
+                "checks": [
+                    {
+                        "severity": check.severity,
+                        "label": CHECK_LABELS.get(check.check_type, check.check_type),
+                        "detail": check.detail,
+                    }
+                    for check in finding.checks
+                ],
                 "why": attack.why_it_matters if attack else "",
                 "fix": attack.how_to_fix if attack else "",
                 "copy_text": "\n".join(attack.turns) if attack else "",

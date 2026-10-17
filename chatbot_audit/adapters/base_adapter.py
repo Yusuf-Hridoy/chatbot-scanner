@@ -12,7 +12,14 @@ from chatbot_audit.data_models import ClientConfig, HttpTargetConfig
 
 
 class AdapterError(Exception):
-    """Any failure talking to the chatbot: network, timeout, bad status, missing reply."""
+    """Any failure talking to the chatbot: network, timeout, bad status, missing reply.
+
+    `retryable` is True only for timeouts, connection errors and HTTP 5xx responses.
+    """
+
+    def __init__(self, message: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class BotReply(BaseModel):
@@ -48,11 +55,18 @@ async def post_json(
     try:
         response = await client.request(method, url, **kwargs)
     except httpx.TimeoutException as exc:
-        raise AdapterError(f"The chatbot at {url} did not answer within {timeout_seconds:g} seconds.") from exc
+        raise AdapterError(
+            f"The chatbot at {url} did not answer within {timeout_seconds:g} seconds.", retryable=True
+        ) from exc
     except httpx.RequestError as exc:
-        raise AdapterError(f"Could not reach the chatbot at {url}: {exc.__class__.__name__}.") from exc
+        raise AdapterError(
+            f"Could not reach the chatbot at {url}: {exc.__class__.__name__}.", retryable=True
+        ) from exc
     if not response.is_success:
-        raise AdapterError(f"The chatbot at {url} returned HTTP {response.status_code}.")
+        raise AdapterError(
+            f"The chatbot at {url} returned HTTP {response.status_code}.",
+            retryable=response.status_code >= 500,
+        )
     try:
         return response.json()
     except ValueError as exc:

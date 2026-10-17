@@ -13,9 +13,9 @@ import typer
 from chatbot_audit.adapters.base_adapter import AdapterError, create_adapter
 from chatbot_audit.attacks.attack_loader import filter_by_tier, load_attacks
 from chatbot_audit.config_loader import ConfigError, config_summary, load_client_config
-from chatbot_audit.data_models import Exchange, Finding, Verdict
+from chatbot_audit.data_models import Finding, Verdict
 from chatbot_audit.pipeline.grade_calculator import calculate_grade
-from chatbot_audit.pipeline.run_folder import EXCHANGES_FILE, VERDICTS_FILE, read_jsonl
+from chatbot_audit.pipeline.run_folder import VERDICTS_FILE, read_jsonl, read_latest_exchanges
 from chatbot_audit.pipeline.step1_run_attacks import run_attacks
 from chatbot_audit.pipeline.step2_evaluate_results import evaluate_run
 from chatbot_audit.pipeline.step4_build_report import build_report
@@ -45,7 +45,7 @@ def _check_tier(tier: str | None) -> None:
 
 
 def _print_grade(run_dir: Path, findings: list[Finding]) -> None:
-    exchanges = read_jsonl(run_dir / EXCHANGES_FILE, Exchange)
+    exchanges = read_latest_exchanges(run_dir)
     verdicts = read_jsonl(run_dir / VERDICTS_FILE, Verdict)
     grade = calculate_grade(findings, exchanges, verdicts)
     typer.echo("")

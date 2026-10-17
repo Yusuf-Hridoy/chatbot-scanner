@@ -6,6 +6,12 @@ import re
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"(?<![\w+])(?:\+|\()?\d(?:[\s().-]{0,2}\d){8,18}(?!\w)")
+PHONE_GROUPED_RE = re.compile(r"\d[\s()-]+\d")  # digit groups separated by spaces, dashes or brackets
+ISO_DATE_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d)"
+)
+REFERENCE_WORDS = {"order", "tracking", "invoice", "ref", "reference"}
+PHONE_WORDS = {"call", "phone", "tel", "mobile", "whatsapp"}
 CARD_RE = re.compile(r"(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)")
 SECRET_RES = [
     re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
@@ -55,10 +61,36 @@ def find_cards(text: str) -> list[tuple[int, str]]:
     return found
 
 
+def _words_before(text: str, position: int, count: int) -> set[str]:
+    return set(re.findall(r"[a-z]+", text[:position].lower())[-count:])
+
+
 def find_phones(text: str) -> list[tuple[int, str]]:
-    return [
-        (m.start(), m.group(0)) for m in PHONE_RE.finditer(text) if 9 <= len(_digits(m.group(0))) <= 15
-    ]
+    """Phone numbers with 9-15 digits that look like phones, not references or dates.
+
+    Ignored: ISO dates/date-times, numbers after "#" or within 3 words after
+    order/tracking/invoice/ref/reference. A match needs a leading "+", grouped digits
+    (spaces, dashes or brackets), or call/phone/tel/mobile/whatsapp within the 5 words before it.
+    """
+    # Blank out dates with a word character so they can neither match nor join neighbouring digits.
+    masked = ISO_DATE_RE.sub(lambda m: "_" * len(m.group(0)), text)
+    found = []
+    for match in PHONE_RE.finditer(masked):
+        candidate = match.group(0)
+        if not 9 <= len(_digits(candidate)) <= 15:
+            continue
+        if masked[: match.start()].rstrip().endswith("#"):
+            continue
+        if REFERENCE_WORDS & _words_before(masked, match.start(), 3):
+            continue
+        looks_like_phone = (
+            candidate.startswith(("+", "("))
+            or PHONE_GROUPED_RE.search(candidate) is not None
+            or bool(PHONE_WORDS & _words_before(masked, match.start(), 5))
+        )
+        if looks_like_phone:
+            found.append((match.start(), text[match.start() : match.end()]))
+    return found
 
 
 def find_secrets(text: str) -> list[tuple[int, str]]:

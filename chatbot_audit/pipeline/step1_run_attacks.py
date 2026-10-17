@@ -19,6 +19,7 @@ from chatbot_audit.pipeline.run_folder import (
     locate_run,
     read_json,
     read_jsonl,
+    relative_config_path,
     repair_jsonl,
     write_json,
 )
@@ -34,11 +35,13 @@ def _now() -> datetime:
 async def _send_with_retry(
     adapter: BaseAdapter, limiter: RateLimiter, config: ClientConfig, conversation_id: str, message: str
 ):
-    """Send one message; on AdapterError pause and retry exactly once."""
+    """Send one message; retry exactly once after a pause on timeouts, connection errors and 5xx."""
     await limiter.wait()
     try:
         return await adapter.send(conversation_id, message)
-    except AdapterError:
+    except AdapterError as exc:
+        if not exc.retryable:
+            raise
         await asyncio.sleep(config.limits.retry_pause_seconds)
         await limiter.wait()
         return await adapter.send(conversation_id, message)
@@ -108,7 +111,8 @@ async def run_attacks_async(
 
     exchanges_path = run_dir / EXCHANGES_FILE
     repair_jsonl(exchanges_path)
-    done_ids = {exchange.attack_id for exchange in read_jsonl(exchanges_path, Exchange)}
+    # Only completed exchanges count as done; inconclusive attacks are re-sent and appended.
+    done_ids = {e.attack_id for e in read_jsonl(exchanges_path, Exchange) if e.status == "completed"}
     pending = [attack for attack in attacks if attack.id not in done_ids]
     run_id = run_dir.name
 
@@ -124,7 +128,7 @@ async def run_attacks_async(
         attack_count=len(attacks),
         attack_pack_hash=attack_pack_hash(pack_dir),
         started_at=previous.started_at if previous else _now(),
-        config_path=str(config_path),
+        config_path=relative_config_path(config_path, run_dir),
         attack_pack_dir=str(pack_dir),
     )
     write_json(run_dir / RUN_INFO_FILE, info)

@@ -82,9 +82,11 @@ reply once it stops changing. Every conversation gets a fresh browser session.
      preset: generic
      selectors:                  # optional overrides on top of the preset
        frame: "iframe#chat"      # only if the chat lives inside an iframe
+       evidence_area: "#chat-box"  # optional: what the evidence screenshot shows (default: the chat)
    ```
 2. **Check it.** `audit check --config PATH` opens the page, sends "Hello", prints the reply and saves
-   `check_screenshot.png` next to the config. Look at the screenshot.
+   `check_screenshot.png` (chat area) and `check_screenshot.page.png` (full page) next to the config.
+   Look at the screenshot.
 3. **If the check fails** (the input or reply is not found), record selectors with `audit connect` and
    paste the block it prints into your config. Then run `audit check` again.
 4. **Run the audit** as usual: `audit full --config PATH --pdf`. Add `--headed` to watch the browser.
@@ -101,29 +103,34 @@ Browser runs use at most 3 parallel conversations.
 ### `audit connect` walkthrough
 
 `audit connect --url https://staging.example-shop.com/ [--out target_recorded.yaml]` opens a browser
-window and asks you to click things. While it waits for a click, your click is recorded instead of
-acting on the page.
+window and asks you to click things. While it waits for a click on a chat element (steps 3 to 7), your
+click is recorded instead of acting on the page.
 
 1. *"The page is loading…"*
-2. *"Click the chat bubble that opens the chat. If the chat box is already open, press Enter here."*
+2. *"Close any cookie banners or popups on the page, then press Enter."* Clicks act on the page normally
+   in this step, so you can accept cookies or close a promo before the recording starts.
+3. *"Click the chat bubble that opens the chat. If the chat box is already open, press Enter here."*
    Click the launcher (the tool then opens the chat for you) and press Enter in the terminal, or just
    press Enter if the chat is already open.
-3. *"Click inside the message box where customers type."* If the box is inside an iframe, the iframe
+4. *"Click inside the message box where customers type."* If the box is inside an iframe, the iframe
    is detected automatically (turn this off with `--no-frame-auto`).
-4. The tool types "Hello" and presses Enter.
-5. *"Click on the bot's reply."* The tool turns your click into a selector that matches every bot
+5. The tool types "Hello" and presses Enter.
+6. *"Click on the bot's reply."* The tool turns your click into a selector that matches every bot
    message, shows the matched reply text and asks *"Is this the bot's reply? [Y/n]"*. Answer `n` to try again.
-6. *"If a typing animation appears while the bot replies, click it now during the next reply, or press
+7. *"If a typing animation appears while the bot replies, click it now during the next reply, or press
    Enter to skip."* The tool sends "What can you help with?". Click the animation quickly, or press Enter.
-7. The `target:` block is printed and saved to `--out` (default `./target_recorded.yaml`). Paste it
+8. The `target:` block is printed and saved to `--out` (default `./target_recorded.yaml`). Paste it
    into your client config and run `audit check`.
 
 Each click step times out after 120 seconds.
 
 ## Evidence and delivery
 
-- **Browser runs** save `evidence/<attack_id>.png` (full-page screenshot at the end of the
-  conversation) and `evidence/<attack_id>.webm` (recording) in the run folder. Each finding card in the
+- **Browser runs** save `evidence/<attack_id>.png` (screenshot of the chat area at the end of the
+  conversation), `evidence/<attack_id>.page.png` (full page) and `evidence/<attack_id>.webm`
+  (recording) in the run folder. The chat area is the `evidence_area` selector if set, otherwise the
+  chat iframe, otherwise the box around the input that holds the bot's messages (or the full page if
+  none is found). Each finding card in the
   report shows the screenshot and a "Watch the recording" link. The PDF shows the screenshot only.
 - **API runs (HTTP/OpenAI)** have transcript evidence only. To add video, put an `evidence_target`
   (a browser target for the same bot's website) in the client config and run

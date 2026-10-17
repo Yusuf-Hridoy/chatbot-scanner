@@ -133,11 +133,59 @@ async def test_end_conversation_saves_evidence(unsafe_bot, tmp_path: Path, recor
         await adapter.close()
     assert evidence.screenshot_path == tmp_path / "evidence" / "greeting.png"
     assert evidence.screenshot_path.stat().st_size > 0
+    assert (tmp_path / "evidence" / "greeting.page.png").stat().st_size > 0
     files = sorted(p.name for p in (tmp_path / "evidence").iterdir())
     if record_video:
         assert evidence.video_path == tmp_path / "evidence" / "greeting.webm"
         assert evidence.video_path.stat().st_size > 0
-        assert files == ["greeting.png", "greeting.webm"]
+        assert files == ["greeting.page.png", "greeting.png", "greeting.webm"]
     else:
         assert evidence.video_path is None
-        assert files == ["greeting.png"]
+        assert files == ["greeting.page.png", "greeting.png"]
+
+
+def png_size(path: Path) -> tuple[int, int]:
+    header = path.read_bytes()
+    return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")  # IHDR width, height
+
+
+async def take_screenshots(adapter: BrowserAdapter, evidence_dir: Path) -> tuple[Path, Path]:
+    """(chat-area screenshot, full-page screenshot) after a one-message conversation."""
+    try:
+        conversation = await adapter.start_conversation()
+        await adapter.send(conversation, "Hi")
+        await adapter.end_conversation(conversation, evidence_dir, "shot")
+    finally:
+        await adapter.close()
+    return evidence_dir / "shot.png", evidence_dir / "shot.page.png"
+
+
+@pytest.mark.parametrize("mode", ["iframe", "inline"])
+async def test_main_screenshot_shows_the_chat_area(unsafe_bot, tmp_path: Path, mode: str) -> None:
+    if mode == "iframe":
+        adapter = make_adapter(unsafe_bot, record_video=False)
+    else:
+        adapter = make_adapter(unsafe_bot, "/?frame=0", selectors={}, record_video=False)
+    viewport_width = adapter.target.viewport[0]
+    area, page = await take_screenshots(adapter, tmp_path)
+    assert png_size(page)[0] == viewport_width
+    assert png_size(area)[0] < viewport_width
+    assert png_size(area)[0] <= 400  # the demo widget is 360 px wide
+
+
+async def test_evidence_area_selector_overrides_the_choice(unsafe_bot, tmp_path: Path) -> None:
+    adapter = make_adapter(
+        unsafe_bot, record_video=False, selectors={"frame": "iframe[data-chat-frame]", "evidence_area": ".shop-header"}
+    )
+    area, page = await take_screenshots(adapter, tmp_path)
+    (area_width, area_height), (page_width, page_height) = png_size(area), png_size(page)
+    assert area_width == page_width  # the header spans the page, unlike the 360 px chat iframe
+    assert area_height < 200 < page_height
+
+
+async def test_screenshot_falls_back_to_full_page(unsafe_bot, tmp_path: Path) -> None:
+    adapter = make_adapter(
+        unsafe_bot, record_video=False, selectors={"frame": "iframe[data-chat-frame]", "evidence_area": "#no-such-area"}
+    )
+    area, page = await take_screenshots(adapter, tmp_path)
+    assert area.read_bytes() == page.read_bytes()

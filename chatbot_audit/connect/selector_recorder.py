@@ -17,6 +17,7 @@ SELECTOR_BUILDER_JS = Path(__file__).resolve().parent / "selector_builder.js"
 PICK_TIMEOUT_SECONDS = 120.0
 FIRST_MESSAGE = "Hello"
 SECOND_MESSAGE = "What can you help with?"
+CLOSE_POPUPS_PROMPT = "Close any cookie banners or popups on the page, then press Enter. "
 
 
 class RecorderUI(Protocol):
@@ -51,7 +52,7 @@ class Pick:
 
 
 class SelectorRecorder:
-    """Guides the user through clicking the launcher, input, bot reply and typing indicator."""
+    """Guides the user through closing popups, then clicking the launcher, input, bot reply and typing indicator."""
 
     def __init__(
         self,
@@ -148,6 +149,10 @@ class SelectorRecorder:
         """Run the guided steps and return the `target:` block as a dict."""
         self.ui.say("The page is loading…")
         await self.page.goto(url)
+
+        # Pick mode is off here, so clicks act on the page normally.
+        await self._set_pick_mode(None)
+        await self.ui.wait_for_enter(CLOSE_POPUPS_PROMPT)
 
         launcher = await self._pick_or_enter(
             "unique",

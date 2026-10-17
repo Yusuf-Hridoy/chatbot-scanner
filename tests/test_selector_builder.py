@@ -11,7 +11,12 @@ import yaml
 from playwright.async_api import Browser, Page, async_playwright
 
 from chatbot_audit.adapters.browser_adapter import BrowserAdapter
-from chatbot_audit.connect.selector_recorder import SELECTOR_BUILDER_JS, SelectorRecorder, target_yaml
+from chatbot_audit.connect.selector_recorder import (
+    CLOSE_POPUPS_PROMPT,
+    SELECTOR_BUILDER_JS,
+    SelectorRecorder,
+    target_yaml,
+)
 from chatbot_audit.data_models import BrowserTargetConfig, LimitsConfig
 from conftest import bot_port
 
@@ -105,7 +110,9 @@ class ScriptedUI:
     def __init__(self) -> None:
         self.page: Page | None = None
         self.lines: list[str] = []
+        self.prompts: list[str] = []
         self.tasks: list[asyncio.Task] = []
+        self.banner_closed_by_click = False
 
     async def _click_when_picking(self, locator) -> None:
         """Click only once the recorder has switched pick mode on, like a person reading the prompt."""
@@ -131,7 +138,12 @@ class ScriptedUI:
             self.tasks.append(asyncio.ensure_future(self._click_when_picking(bubble)))
 
     async def wait_for_enter(self, prompt: str) -> None:
-        if prompt.startswith("Click the chat bubble"):
+        self.prompts.append(prompt)
+        if prompt.startswith("Close any cookie banners"):
+            # Pick mode is off: this click must accept the cookies, not be recorded.
+            await self.page.locator("[data-cookie-accept]").click()
+            self.banner_closed_by_click = not await self.page.locator("[data-cookie-banner]").is_visible()
+        elif prompt.startswith("Click the chat bubble"):
             await self.page.locator("[data-chat-launcher]").click()
             await asyncio.sleep(1.0)  # the recorder sees the click first, then this "Enter"
         # Any other prompt (typing indicator): press Enter to skip.
@@ -151,6 +163,8 @@ async def test_recorder_flow_produces_working_selectors(browser: Browser, unsafe
     finally:
         await context.close()
 
+    assert ui.prompts[0] == CLOSE_POPUPS_PROMPT
+    assert ui.banner_closed_by_click
     assert target["selectors"] == {
         "frame": "[data-chat-frame]",
         "open_button": "[data-chat-launcher]",

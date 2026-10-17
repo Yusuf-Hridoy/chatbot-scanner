@@ -29,6 +29,15 @@ DISMISS_WAIT_SECONDS = 2.0
 APPEAR_POLL_SECONDS = 0.1
 SETTLE_POLL_SECONDS = 0.25
 IFRAME_SOURCES_JS = "() => Array.from(document.querySelectorAll('iframe')).map(f => f.getAttribute('src') || '')"
+# Closest ancestor of the input that also contains a bot message (null if there is none below <body>).
+CHAT_BOX_JS = """(input, botSelector) => {
+  for (let node = input.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (node.querySelector(botSelector)) return node;
+  }
+  return null;
+}"""
+PAGE_SCREENSHOT_SUFFIX = ".page.png"
+AREA_SCREENSHOT_TIMEOUT_MS = 5000
 
 Scope = Page | FrameLocator
 
@@ -248,7 +257,7 @@ class BrowserAdapter(BaseAdapter):
     async def end_conversation(
         self, conversation_id: str, evidence_dir: Path | None, evidence_name: str
     ) -> ConversationEvidence:
-        """Save a full-page screenshot and the video (if recorded), then close the context."""
+        """Save the chat-area and full-page screenshots and the video (if recorded), then close the context."""
         conversation = self._conversations.pop(conversation_id, None)
         evidence = ConversationEvidence()
         if conversation is None:
@@ -257,12 +266,7 @@ class BrowserAdapter(BaseAdapter):
         try:
             if evidence_dir is not None:
                 evidence_dir.mkdir(parents=True, exist_ok=True)
-                screenshot = evidence_dir / f"{evidence_name}.png"
-                try:
-                    await page.screenshot(path=str(screenshot), full_page=True)
-                    evidence.screenshot_path = screenshot
-                except PlaywrightError as exc:
-                    evidence.warnings.append(f"Screenshot not saved: {_first_line(exc)}")
+                await self._save_screenshots(conversation, evidence_dir, evidence_name, evidence)
         finally:
             await conversation.context.close()  # finalizes the video file
         video = page.video
@@ -277,6 +281,42 @@ class BrowserAdapter(BaseAdapter):
             except PlaywrightError as exc:
                 evidence.warnings.append(f"Video not saved: {_first_line(exc)}")
         return evidence
+
+    async def _save_screenshots(
+        self, conversation: _Conversation, evidence_dir: Path, evidence_name: str, evidence: ConversationEvidence
+    ) -> None:
+        """<name>.page.png is the full page; <name>.png (used by the report) is the chat area only."""
+        page = conversation.page
+        page_shot = evidence_dir / f"{evidence_name}{PAGE_SCREENSHOT_SUFFIX}"
+        screenshot = evidence_dir / f"{evidence_name}.png"
+        try:
+            await page.screenshot(path=str(page_shot), full_page=True)
+        except PlaywrightError as exc:
+            evidence.warnings.append(f"Screenshot not saved: {_first_line(exc)}")
+            return
+        saved = False
+        try:
+            area = await self._evidence_area(conversation)
+            if area is not None:
+                await area.screenshot(path=str(screenshot), timeout=AREA_SCREENSHOT_TIMEOUT_MS)
+                saved = True
+        except PlaywrightError:
+            pass  # chat area hidden, detached or not matched
+        if not saved:
+            shutil.copyfile(page_shot, screenshot)  # fall back to the full page
+        evidence.screenshot_path = screenshot
+
+    async def _evidence_area(self, conversation: _Conversation) -> Any | None:
+        """The element to screenshot: evidence_area, else the chat iframe, else the input's chat box."""
+        page, scope = conversation.page, conversation.scope
+        if self.selectors.evidence_area:
+            return await self._find_visible(self.selectors.evidence_area, [scope, page])
+        if self.selectors.frame:
+            return page.locator(self.selectors.frame).first
+        handle = await scope.locator(self.selectors.input).first.evaluate_handle(
+            CHAT_BOX_JS, self.selectors.bot_message, timeout=AREA_SCREENSHOT_TIMEOUT_MS
+        )
+        return handle.as_element()
 
     async def close(self) -> None:
         for conversation_id in list(self._conversations):

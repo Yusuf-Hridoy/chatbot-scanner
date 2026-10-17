@@ -3,3 +3,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 runs/
+check_screenshot.png
+check_screenshot.page.png
+target_recorded.yaml
+*.zip
+.env

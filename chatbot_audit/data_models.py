@@ -75,7 +75,9 @@ class OpenAITargetConfig(BaseModel):
     system_prompt_file: str | None = None
 
 
-WIDGET_SELECTOR_KEYS = ("frame", "open_button", "input", "send_button", "bot_message", "typing_indicator")
+WIDGET_SELECTOR_KEYS = (
+    "frame", "open_button", "input", "send_button", "bot_message", "typing_indicator", "evidence_area",
+)
 
 
 class WidgetSelectors(BaseModel):
@@ -85,6 +87,7 @@ class WidgetSelectors(BaseModel):
     send_button: str | None = None      # None = press Enter in the input
     bot_message: str                    # matches EVERY bot message element in the conversation
     typing_indicator: str | None = None # element visible while the bot is "typing"
+    evidence_area: str | None = None    # element to screenshot as evidence; None = the iframe or chat box
 
 
 class BrowserTargetConfig(BaseModel):

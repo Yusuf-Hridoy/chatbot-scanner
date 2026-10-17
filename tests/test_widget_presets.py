@@ -51,6 +51,11 @@ def test_overrides_merge_on_top_of_preset() -> None:
     assert selectors.open_button == generic["open_button"]
 
 
+def test_evidence_area_is_optional_and_overridable() -> None:
+    assert resolve_selectors(target()).evidence_area is None
+    assert resolve_selectors(target(selectors={"evidence_area": "#chat-box"})).evidence_area == "#chat-box"
+
+
 def test_missing_input_after_merge_fails_clearly() -> None:
     with pytest.raises(ConfigError) as excinfo:
         resolve_selectors(target(selectors={"input": None}))

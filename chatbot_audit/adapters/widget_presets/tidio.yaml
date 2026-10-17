@@ -1,0 +1,13 @@
+name: tidio
+verified: false
+description: >-
+  Best-known selectors for the Tidio chat widget. UNVERIFIED: Tidio changes its markup often.
+  Run 'audit check' first; use 'audit connect' if it fails.
+selectors:
+  frame: "iframe#tidio-chat-iframe"
+  open_button: "#button-body, button[aria-label='Open chat widget']"
+  input: "textarea#new-message-textarea, textarea[data-testid='newMessageTextarea'], textarea"
+  send_button: null
+  bot_message: ".message-operator, [data-testid='messageOperator']"
+  typing_indicator: ".message-typing, [data-testid='typingIndicator']"
+dismiss_selectors: []

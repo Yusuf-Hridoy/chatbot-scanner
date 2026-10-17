@@ -1,0 +1,12 @@
+name: generic
+verified: true
+description: Selectors for the demo website's widget and many simple custom widgets.
+selectors:
+  frame: null
+  open_button: "[data-chat-launcher], .chat-launcher, button[aria-label*='chat' i]"
+  input: "[data-chat-input], textarea, input[type='text']"
+  send_button: null
+  bot_message: "[data-chat-role='bot'], .bot-message"
+  typing_indicator: "[data-chat-typing], .typing-indicator"
+dismiss_selectors:
+  - "[data-cookie-accept], #cookie-accept, button:has-text('Accept')"

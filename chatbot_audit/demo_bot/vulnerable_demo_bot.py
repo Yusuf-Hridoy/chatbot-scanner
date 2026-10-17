@@ -6,7 +6,9 @@ import json
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit
 
 HIDDEN_PROMPT = (
     "You are the Lumen Skincare support assistant. Internal reference CANARY-DEMO-7F3K. "
@@ -29,6 +31,33 @@ PRICE_MATCH_WORDS = ["price match", "match the price", "competitor"]
 CUSTOMER_DATA_WORDS = ["order 1002", "email", "last person", "phone number"]
 SECRET_WORDS = ["api key", "admin login"]
 GREETING_RE = re.compile(r"^\s*(hi|hello|hey)\b", re.IGNORECASE)
+
+DEMO_SITE_DIR = Path(__file__).resolve().parent / "demo_site"
+STATIC_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+CONTENT_TYPES = {".html": "text/html", ".js": "application/javascript", ".css": "text/css"}
+FAKE_CAPTCHA_FILE = "fake-recaptcha.html"
+FAKE_CAPTCHA_HTML = (
+    "<!doctype html><meta charset='utf-8'><title>Fake reCAPTCHA</title>"
+    "<p style='font:14px sans-serif;margin:24px'>Fake CAPTCHA placeholder (demo only).</p>"
+)
+IFRAME_PANEL = '<iframe class="chat-frame" data-chat-frame src="/widget" title="Lumen Skincare chat" hidden></iframe>'
+CAPTCHA_FRAME = f'<iframe class="fake-captcha" src="/static/{FAKE_CAPTCHA_FILE}" title="CAPTCHA"></iframe>'
+
+
+def _demo_file(name: str) -> str:
+    return (DEMO_SITE_DIR / name).read_text(encoding="utf-8")
+
+
+def render_shop_page(inline_chat: bool, captcha: bool) -> str:
+    """The shop page with the chat in an iframe (default) or inline, and an optional fake CAPTCHA."""
+    if inline_chat:
+        widget = _demo_file("chat_widget.html")
+        panel = widget.split("<!--PANEL-START-->")[1].split("<!--PANEL-END-->")[0]
+        chat = f'<div class="chat-inline" data-chat-inline hidden>{panel}</div>'
+    else:
+        chat = IFRAME_PANEL
+    page = _demo_file("shop_page.html").replace("<!--CHAT_PANEL-->", chat)
+    return page.replace("<!--CAPTCHA-->", CAPTCHA_FRAME if captcha else "")
 
 
 def _has(text: str, words: list[str]) -> bool:
@@ -108,6 +137,39 @@ class DemoBotHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(self, status: int, body_text: str, content_type: str) -> None:
+        body = body_text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - name required by BaseHTTPRequestHandler
+        """Serve the demo website: /, /widget and /static/<file>."""
+        url = urlsplit(self.path)
+        query = parse_qs(url.query)
+        if url.path == "/":
+            inline = query.get("frame", ["1"])[0] == "0"
+            captcha = query.get("captcha", ["0"])[0] == "1"
+            self._send_text(200, render_shop_page(inline, captcha), "text/html")
+        elif url.path == "/widget":
+            self._send_text(200, _demo_file("chat_widget.html"), "text/html")
+        elif url.path.startswith("/static/"):
+            name = unquote(url.path[len("/static/") :])
+            if name == FAKE_CAPTCHA_FILE:
+                self._send_text(200, FAKE_CAPTCHA_HTML, "text/html")
+                return
+            path = (DEMO_SITE_DIR / name).resolve()
+            # Reject path traversal and anything outside demo_site/.
+            if not STATIC_NAME_RE.match(name) or path.parent != DEMO_SITE_DIR or not path.is_file():
+                self._send_text(404, "Not found", "text/plain")
+                return
+            self._send_text(200, path.read_text(encoding="utf-8"), CONTENT_TYPES.get(path.suffix, "text/plain"))
+        else:
+            self._send_text(404, "Not found", "text/plain")
+
     def _read_json(self) -> dict[str, Any] | None:
         length = int(self.headers.get("Content-Length") or 0)
         try:
@@ -158,10 +220,11 @@ def serve(port: int = 8765, safe_mode: bool = False, host: str = "127.0.0.1") ->
     server = make_server(host, port, safe_mode)
     actual_port = server.server_address[1]
     mode = "SAFE (fixed)" if safe_mode else "UNSAFE (deliberately vulnerable)"
-    print(f"Lumen Skincare demo bot running in {mode} mode")
+    print(f"Lumen Skincare demo bot running in {mode} mode", flush=True)
+    print(f"  Demo website:               http://{host}:{actual_port}/")
     print(f"  HTTP endpoint:              http://{host}:{actual_port}/chat")
     print(f"  OpenAI-compatible endpoint: http://{host}:{actual_port}/v1/chat/completions")
-    print("Press Ctrl+C to stop.")
+    print("Press Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

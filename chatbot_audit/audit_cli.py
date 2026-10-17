@@ -11,12 +11,15 @@ from typing import Annotated, Optional
 import typer
 
 from chatbot_audit.adapters.base_adapter import AdapterError, create_adapter
+from chatbot_audit.adapters.widget_preset_loader import is_verified, list_presets, load_preset
 from chatbot_audit.attacks.attack_loader import filter_by_tier, load_attacks
 from chatbot_audit.config_loader import ConfigError, config_summary, load_client_config
-from chatbot_audit.data_models import Finding, Verdict
+from chatbot_audit.data_models import BrowserTargetConfig, Finding, Verdict
 from chatbot_audit.pipeline.grade_calculator import calculate_grade
+from chatbot_audit.pipeline.package_run import package_run
+from chatbot_audit.pipeline.replay_findings import replay_findings
 from chatbot_audit.pipeline.run_folder import VERDICTS_FILE, read_jsonl, read_latest_exchanges
-from chatbot_audit.pipeline.step1_run_attacks import run_attacks
+from chatbot_audit.pipeline.step1_run_attacks import run_attacks, warn_if_unverified
 from chatbot_audit.pipeline.step2_evaluate_results import evaluate_run
 from chatbot_audit.pipeline.step4_build_report import build_report
 
@@ -32,6 +35,8 @@ TierOption = Annotated[
     Optional[str], typer.Option("--tier", help="Override the config tier: quick, standard or deep.")
 ]
 PdfOption = Annotated[bool, typer.Option("--pdf", help="Also print the report to PDF (needs Playwright).")]
+HeadedOption = Annotated[bool, typer.Option("--headed", help="Show the browser window (browser targets only).")]
+CHECK_SCREENSHOT = "check_screenshot"
 
 
 def _fail(message: str, code: int = 1) -> typer.Exit:
@@ -87,23 +92,34 @@ def check(config: ConfigOption) -> None:
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
 
-    async def ping() -> tuple[str, int]:
+    is_browser = isinstance(client_config.target, BrowserTargetConfig)
+    if is_browser:
+        client_config.target.record_video = False  # a screenshot is enough for a pre-flight check
+        warn_if_unverified(client_config.target, typer.echo)
+    screenshot_dir = Path(config).resolve().parent if is_browser else None
+
+    async def ping() -> tuple[str, int, Path | None]:
         adapter = create_adapter(client_config)
         try:
             conversation_id = await adapter.start_conversation()
-            reply = await adapter.send(conversation_id, "Hello")
-            return reply.text, reply.latency_ms
+            try:
+                reply = await adapter.send(conversation_id, "Hello")
+            finally:
+                evidence = await adapter.end_conversation(conversation_id, screenshot_dir, CHECK_SCREENSHOT)
+            return reply.text, reply.latency_ms, evidence.screenshot_path
         finally:
             await adapter.close()
 
     try:
-        text, latency = asyncio.run(ping())
+        text, latency, screenshot = asyncio.run(ping())
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
     except AdapterError as exc:
         raise _fail(f"The chatbot is not reachable. {exc}", code=2) from exc
     typer.secho(f"Connected to {client_config.display_name} ({client_config.target.type}).", fg=typer.colors.GREEN)
     typer.echo(f"Sent:    Hello\nReply:   {text}\nLatency: {latency} ms")
+    if screenshot:
+        typer.echo(f"Screenshot: {screenshot}")
 
 
 @app.command()
@@ -111,11 +127,12 @@ def run(
     config: ConfigOption,
     tier: TierOption = None,
     resume: Annotated[Optional[str], typer.Option("--resume", help="Run id to resume.")] = None,
+    headed: HeadedOption = False,
 ) -> None:
     """Step 1: send the attacks and record the conversations."""
     _check_tier(tier)
     try:
-        run_dir = run_attacks(config, tier=tier, resume_run_id=resume, echo=typer.echo)
+        run_dir = run_attacks(config, tier=tier, resume_run_id=resume, echo=typer.echo, headed=headed)
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
     typer.echo(f"\nRun complete. Run folder: {run_dir}")
@@ -140,11 +157,11 @@ def report(run: RunOption, pdf: PdfOption = False) -> None:
 
 
 @app.command()
-def full(config: ConfigOption, tier: TierOption = None, pdf: PdfOption = False) -> None:
+def full(config: ConfigOption, tier: TierOption = None, pdf: PdfOption = False, headed: HeadedOption = False) -> None:
     """Run steps 1, 2 and 4 in sequence and print the grade."""
     _check_tier(tier)
     try:
-        run_dir = run_attacks(config, tier=tier, echo=typer.echo)
+        run_dir = run_attacks(config, tier=tier, echo=typer.echo, headed=headed)
         findings = evaluate_run(run_dir, echo=typer.echo)
         typer.echo("")
         html_path = build_report(run_dir, pdf=pdf, echo=typer.echo)
@@ -152,6 +169,57 @@ def full(config: ConfigOption, tier: TierOption = None, pdf: PdfOption = False) 
         raise _fail(str(exc)) from exc
     _print_grade(run_dir, findings)
     typer.secho(f"Report: {html_path}", fg=typer.colors.GREEN)
+
+
+@app.command()
+def connect(
+    url: Annotated[str, typer.Option("--url", help="Page with the chat widget.")],
+    out: Annotated[Path, typer.Option("--out", help="Where to write the target block.")] = Path(
+        "target_recorded.yaml"
+    ),
+    frame_auto: Annotated[
+        bool, typer.Option("--frame-auto/--no-frame-auto", help="Detect the chat iframe automatically.")
+    ] = True,
+) -> None:
+    """Record chat widget selectors by clicking on the page (opens a browser window)."""
+    from chatbot_audit.connect.selector_recorder import run_connect
+
+    try:
+        asyncio.run(run_connect(url, out, frame_auto=frame_auto))
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    except KeyboardInterrupt as exc:
+        raise _fail("Cancelled.") from exc
+
+
+@app.command()
+def replay(run: RunOption, headed: HeadedOption = False) -> None:
+    """Re-run attacks with findings in a real browser (evidence_target) to record video evidence."""
+    try:
+        replay_findings(run, echo=typer.echo, headed=headed)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    except AdapterError as exc:
+        raise _fail(str(exc), code=2) from exc
+    typer.echo(f"Rebuild the report to include the replays: audit report --run {run}")
+
+
+@app.command()
+def package(run: RunOption) -> None:
+    """Zip the report and its evidence for delivery to the customer."""
+    try:
+        package_run(run, echo=typer.echo)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+
+
+@app.command()
+def presets() -> None:
+    """List widget presets for browser targets."""
+    for name in list_presets():
+        data = load_preset(name)
+        flag = "verified" if is_verified(name) else "UNVERIFIED"
+        typer.echo(f"{name:<10} {flag:<11} {' '.join(str(data.get('description', '')).split())}")
 
 
 @app.command("demo-bot")

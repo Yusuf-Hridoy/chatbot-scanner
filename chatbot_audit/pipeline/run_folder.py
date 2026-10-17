@@ -20,6 +20,8 @@ VERDICTS_FILE = "verdicts.jsonl"
 FINDINGS_FILE = "findings.json"
 REPORT_HTML_FILE = "report.html"
 REPORT_PDF_FILE = "report.pdf"
+REPLAYS_FILE = "replays.jsonl"
+EVIDENCE_DIR = "evidence"
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 

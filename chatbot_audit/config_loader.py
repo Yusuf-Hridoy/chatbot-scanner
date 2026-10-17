@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import yaml
 from pydantic import ValidationError
 
-from chatbot_audit.data_models import ClientConfig, HttpTargetConfig
+from chatbot_audit.data_models import BrowserTargetConfig, ClientConfig, HttpTargetConfig, OpenAITargetConfig
 
 ENV_PATTERN = re.compile(r"\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -66,14 +66,35 @@ def load_client_config(path: Path) -> ClientConfig:
         raise ConfigError(format_validation_error(path.name, exc)) from exc
 
     target = config.target
-    if not isinstance(target, HttpTargetConfig) and target.system_prompt_file:
+    if isinstance(target, OpenAITargetConfig) and target.system_prompt_file:
         prompt_path = (path.parent / target.system_prompt_file).resolve()
         if not prompt_path.is_file():
             raise ConfigError(
                 f"{path.name}: target.system_prompt_file points to a missing file: {prompt_path}"
             )
         target.system_prompt_file = str(prompt_path)
+    for field_name in ("target", "evidence_target"):
+        browser_target = getattr(config, field_name)
+        if isinstance(browser_target, BrowserTargetConfig):
+            _prepare_browser_target(browser_target, path, field_name)
     return config
+
+
+def _prepare_browser_target(target: BrowserTargetConfig, path: Path, field_name: str) -> None:
+    """Resolve storage_state_file and check that preset + overrides give complete selectors."""
+    from chatbot_audit.adapters.widget_preset_loader import resolve_selectors
+
+    if target.storage_state_file:
+        state_path = (path.parent / target.storage_state_file).resolve()
+        if not state_path.is_file():
+            raise ConfigError(
+                f"{path.name}: {field_name}.storage_state_file points to a missing file: {state_path}"
+            )
+        target.storage_state_file = str(state_path)
+    try:
+        resolve_selectors(target)
+    except ConfigError as exc:
+        raise ConfigError(f"{path.name}: {field_name}: {exc}") from exc
 
 
 def _mask_url(url: str) -> str:
@@ -92,6 +113,8 @@ def config_summary(config: ClientConfig) -> dict[str, Any]:
             "headers": {name: "***" for name in target.headers},
             "reply_path": target.reply_path,
         }
+    elif isinstance(target, BrowserTargetConfig):
+        target_info = _browser_summary(target)
     else:
         target_info = {
             "base_url": _mask_url(target.base_url),
@@ -99,7 +122,7 @@ def config_summary(config: ClientConfig) -> dict[str, Any]:
             "api_key": f"from env {target.api_key_env} (***)" if target.api_key_env else "none",
             "system_prompt_file": target.system_prompt_file or "none",
         }
-    return {
+    summary: dict[str, Any] = {
         "client": config.client,
         "display_name": config.display_name,
         "adapter_type": target.type,
@@ -110,4 +133,18 @@ def config_summary(config: ClientConfig) -> dict[str, Any]:
         "prompt_fragments": len(config.prompt_fragments),
         "facts": [fact.name for fact in config.facts],
         "allowed_codes": config.allowed_codes,
+    }
+    if config.evidence_target:
+        summary["evidence_target"] = _browser_summary(config.evidence_target)
+    return summary
+
+
+def _browser_summary(target: BrowserTargetConfig) -> dict[str, Any]:
+    return {
+        "url": _mask_url(target.url),
+        "preset": target.preset,
+        "selector_overrides": target.selectors,
+        "headless": target.headless,
+        "record_video": target.record_video,
+        "storage_state_file": "configured (***)" if target.storage_state_file else "none",
     }

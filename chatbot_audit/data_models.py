@@ -75,6 +75,42 @@ class OpenAITargetConfig(BaseModel):
     system_prompt_file: str | None = None
 
 
+WIDGET_SELECTOR_KEYS = ("frame", "open_button", "input", "send_button", "bot_message", "typing_indicator")
+
+
+class WidgetSelectors(BaseModel):
+    frame: str | None = None            # CSS selector of the <iframe> that contains the chat, if any
+    open_button: str | None = None      # chat bubble/launcher; None if the chat box is already visible
+    input: str                          # text box where the customer types
+    send_button: str | None = None      # None = press Enter in the input
+    bot_message: str                    # matches EVERY bot message element in the conversation
+    typing_indicator: str | None = None # element visible while the bot is "typing"
+
+
+class BrowserTargetConfig(BaseModel):
+    type: Literal["browser"]
+    url: str
+    preset: str = "generic"             # name of a file in widget_presets/ (without .yaml)
+    selectors: dict[str, str | None] = {}   # overrides merged on top of the preset's selectors
+    dismiss_selectors: list[str] = []   # clicked if present after page load (cookie banners etc.)
+    reply_settle_ms: int = Field(default=1500, ge=200)   # text must stay unchanged this long
+    page_load_timeout_seconds: float = Field(default=30, gt=0)
+    headless: bool = True
+    record_video: bool = True
+    viewport: tuple[int, int] = (1280, 800)
+    storage_state_file: str | None = None   # Playwright storage state; relative to the config file
+
+    @field_validator("selectors")
+    @classmethod
+    def _known_selector_keys(cls, value: dict[str, str | None]) -> dict[str, str | None]:
+        unknown = sorted(set(value) - set(WIDGET_SELECTOR_KEYS))
+        if unknown:
+            raise ValueError(
+                f"unknown selector key(s) {', '.join(unknown)}; use {', '.join(WIDGET_SELECTOR_KEYS)}"
+            )
+        return value
+
+
 class LimitsConfig(BaseModel):
     max_messages_per_minute: int = Field(default=20, gt=0)
     max_parallel_conversations: int = Field(default=2, gt=0)
@@ -86,7 +122,7 @@ class ClientConfig(BaseModel):
     client: str
     display_name: str
     tier: Tier = "standard"
-    target: Annotated[HttpTargetConfig | OpenAITargetConfig, Field(discriminator="type")]
+    target: Annotated[HttpTargetConfig | OpenAITargetConfig | BrowserTargetConfig, Field(discriminator="type")]
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     canary: str | None = None
     prompt_fragments: list[str] = []
@@ -98,6 +134,7 @@ class ClientConfig(BaseModel):
         r"\b(AI|artificial intelligence|virtual assistant|chatbot|automated assistant|bot)\b"
     )
     never_do: list[str] = []
+    evidence_target: BrowserTargetConfig | None = None   # used only by `audit replay`
 
     @field_validator("disclosure_pattern")
     @classmethod
@@ -155,6 +192,9 @@ class Exchange(BaseModel):
     error: str | None = None
     started_at: datetime
     finished_at: datetime
+    adapter_type: str | None = None
+    evidence_video: str | None = None        # relative to the run folder
+    evidence_screenshot: str | None = None   # relative to the run folder
 
 
 class Verdict(BaseModel):

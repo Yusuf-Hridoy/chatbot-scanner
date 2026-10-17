@@ -1,0 +1,39 @@
+/* Lumen Skincare demo site (fictional). */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #2b2622; background: #fbf8f4; }
+[hidden] { display: none !important; }
+
+/* Shop page */
+.shop-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 32px; border-bottom: 1px solid #ece4da; background: #fff; }
+.logo { font-weight: 700; letter-spacing: .04em; color: #8a5a3b; }
+.shop-header nav a { margin-left: 18px; color: #2b2622; text-decoration: none; font-size: 14px; }
+.product { display: flex; flex-wrap: wrap; gap: 40px; max-width: 980px; margin: 48px auto; padding: 0 24px; }
+.product-image { flex: 1 1 320px; min-height: 340px; border-radius: 16px; background: linear-gradient(160deg, #f3e3d3, #e8cdb5); }
+.product-info { flex: 1 1 320px; }
+.eyebrow { text-transform: uppercase; font-size: 12px; letter-spacing: .08em; color: #8a5a3b; }
+.price { font-size: 22px; font-weight: 600; }
+.buy { padding: 12px 22px; border: 0; border-radius: 999px; background: #2b2622; color: #fff; font-size: 15px; cursor: pointer; }
+.cookie-banner { position: fixed; left: 20px; bottom: 20px; max-width: 360px; padding: 16px; border-radius: 12px; background: #fff; border: 1px solid #ece4da; box-shadow: 0 6px 20px rgba(0,0,0,.08); font-size: 14px; }
+.cookie-banner p { margin: 0 0 10px; }
+.cookie-banner button { padding: 8px 16px; border: 0; border-radius: 8px; background: #8a5a3b; color: #fff; cursor: pointer; }
+.chat-launcher { position: fixed; right: 24px; bottom: 24px; padding: 14px 20px; border: 0; border-radius: 999px; background: #8a5a3b; color: #fff; font-size: 15px; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+.chat-frame, .chat-inline { position: fixed; right: 24px; bottom: 84px; width: 360px; height: 480px; border: 1px solid #ece4da; border-radius: 16px; background: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.15); overflow: hidden; }
+.fake-captcha { display: block; width: 304px; height: 78px; margin: 0 auto 24px; border: 1px solid #ccc; }
+
+/* Chat panel */
+body.widget { background: #fff; }
+.chat-panel { display: flex; flex-direction: column; height: 100vh; }
+.chat-inline .chat-panel { height: 100%; }
+.chat-header { padding: 14px 16px; background: #8a5a3b; color: #fff; font-weight: 600; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: 85%; padding: 9px 12px; border-radius: 14px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+.customer-message { align-self: flex-end; background: #8a5a3b; color: #fff; }
+.bot-message { align-self: flex-start; background: #f3ede6; }
+.typing-indicator { padding: 0 16px 8px; }
+.typing-indicator span { display: inline-block; width: 7px; height: 7px; margin-right: 3px; border-radius: 50%; background: #b9a796; animation: blink 1s infinite; }
+.typing-indicator span:nth-child(2) { animation-delay: .2s; }
+.typing-indicator span:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 50% { opacity: .3; } }
+.chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #ece4da; }
+.chat-form textarea { flex: 1; resize: none; padding: 8px 10px; border: 1px solid #ddd2c6; border-radius: 10px; font: inherit; font-size: 14px; }
+.chat-form button { padding: 0 14px; border: 0; border-radius: 10px; background: #2b2622; color: #fff; cursor: pointer; }

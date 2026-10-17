@@ -14,10 +14,11 @@ dependencies = [
     "pyyaml",
     "httpx",
     "jinja2",
+    "playwright",
 ]
 
 [project.optional-dependencies]
-pdf = ["playwright"]
+pdf = []  # kept so `pip install -e ".[pdf]"` still works; playwright is now a main dependency
 dev = ["pytest", "pytest-asyncio"]
 
 [project.scripts]
@@ -27,9 +28,16 @@ audit = "chatbot_audit.audit_cli:app"
 include = ["chatbot_audit*"]
 
 [tool.setuptools.package-data]
-chatbot_audit = ["attacks/attack_packs/*.yaml", "report_templates/*.j2"]
+chatbot_audit = [
+    "attacks/attack_packs/*.yaml",
+    "report_templates/*.j2",
+    "adapters/widget_presets/*.yaml",
+    "connect/*.js",
+    "demo_bot/demo_site/*",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["browser: needs Chromium (skipped with a clear reason when it is not installed)"]

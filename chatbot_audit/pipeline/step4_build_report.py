@@ -17,10 +17,12 @@ from chatbot_audit.data_models import Attack, Exchange, Finding, Grade, RunInfo,
 from chatbot_audit.pipeline.grade_calculator import calculate_grade
 from chatbot_audit.pipeline.run_folder import (
     FINDINGS_FILE,
+    REPLAYS_FILE,
     REPORT_HTML_FILE,
     REPORT_PDF_FILE,
     RUN_INFO_FILE,
     VERDICTS_FILE,
+    latest_exchanges,
     read_json,
     read_jsonl,
     read_latest_exchanges,
@@ -46,6 +48,9 @@ CHECK_LABELS = {
     "ai_disclosure": "No AI disclosure",
     "judge": "Judge check",
 }
+REPLAY_LABEL = (
+    "Recorded in a real browser during a replay. The bot's wording may differ slightly from the original test."
+)
 NEXT_STEP_FINDINGS = "Forward this report to your developer. Most fixes are changes to the bot's instructions."
 NEXT_STEP_CLEAN = (
     "No issues found in this run. Retest after any change to your bot's model, instructions or knowledge base."
@@ -100,6 +105,23 @@ def _passed_by_category(
     return rows
 
 
+def _existing(run_dir: Path, relative: str | None) -> str | None:
+    """The relative evidence path, if that file really exists in the run folder."""
+    return relative if relative and (run_dir / relative).is_file() else None
+
+
+def _evidence(run_dir: Path, original: Exchange | None, replay: Exchange | None) -> dict[str, Any]:
+    """Screenshot/video for a finding card: the original run's evidence first, otherwise the replay's."""
+    for exchange, is_replay in ((original, False), (replay, True)):
+        if exchange is None:
+            continue
+        screenshot = _existing(run_dir, exchange.evidence_screenshot)
+        video = _existing(run_dir, exchange.evidence_video)
+        if screenshot or video:
+            return {"screenshot": screenshot, "video": video, "replay_label": REPLAY_LABEL if is_replay else None}
+    return {"screenshot": None, "video": None, "replay_label": None}
+
+
 def render_report_html(run_dir: Path, pdf_link: bool) -> tuple[str, Grade]:
     """Render report.html for a run folder and return (html, grade)."""
     info = RunInfo.model_validate(read_json(run_dir / RUN_INFO_FILE))
@@ -108,6 +130,9 @@ def render_report_html(run_dir: Path, pdf_link: bool) -> tuple[str, Grade]:
     findings = [Finding.model_validate(item) for item in read_json(run_dir / FINDINGS_FILE)]
     attacks = {attack.id: attack for attack in load_attacks(Path(info.attack_pack_dir))}
     exchanges_by_id = {exchange.attack_id: exchange for exchange in exchanges}
+    replays_by_id = {
+        replay.attack_id: replay for replay in latest_exchanges(read_jsonl(run_dir / REPLAYS_FILE, Exchange))
+    }
     grade = calculate_grade(findings, exchanges, verdicts)
 
     cards = []
@@ -132,6 +157,9 @@ def render_report_html(run_dir: Path, pdf_link: bool) -> tuple[str, Grade]:
                 "fix": attack.how_to_fix if attack else "",
                 "copy_text": "\n".join(attack.turns) if attack else "",
                 "transcript": _transcript(exchanges_by_id.get(finding.attack_id), finding),
+                "evidence": _evidence(
+                    run_dir, exchanges_by_id.get(finding.attack_id), replays_by_id.get(finding.attack_id)
+                ),
             }
         )
 

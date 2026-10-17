@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import os
 import threading
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
@@ -18,6 +20,32 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_DIR = REPO_ROOT / "examples" / "demo_client"
 HTTP_EXAMPLE = EXAMPLE_DIR / "client_config.yaml"
 OPENAI_EXAMPLE = EXAMPLE_DIR / "client_config_openai.yaml"
+BROWSER_EXAMPLE = EXAMPLE_DIR / "client_config_browser.yaml"
+EXAMPLES = {"http": HTTP_EXAMPLE, "openai": OPENAI_EXAMPLE, "browser": BROWSER_EXAMPLE}
+CHROMIUM_SKIP_REASON = "Chromium not installed. Run: playwright install chromium"
+
+
+@functools.cache
+def chromium_available() -> bool:
+    """Try once per session to launch Chromium. AUDIT_TEST_NO_CHROMIUM=1 simulates a missing browser."""
+    if os.environ.get("AUDIT_TEST_NO_CHROMIUM") == "1":
+        return False
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            playwright.chromium.launch().close()
+    except Exception:  # noqa: BLE001 - any failure means "not usable here"
+        return False
+    return True
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip (never fail) browser-marked tests when Chromium cannot start."""
+    browser_items = [item for item in items if item.get_closest_marker("browser")]
+    if browser_items and not chromium_available():
+        for item in browser_items:
+            item.add_marker(pytest.mark.skip(reason=CHROMIUM_SKIP_REASON))
 
 
 def _start(safe_mode: bool) -> Iterator[DemoBotServer]:
@@ -52,17 +80,19 @@ def make_config(tmp_path: Path) -> Callable[..., Path]:
     """Write a temporary client config (based on the examples) that points at a demo bot."""
 
     def factory(server: DemoBotServer, kind: str = "http", **overrides: Any) -> Path:
-        source = HTTP_EXAMPLE if kind == "http" else OPENAI_EXAMPLE
-        data = yaml.safe_load(source.read_text(encoding="utf-8"))
+        data = yaml.safe_load(EXAMPLES[kind].read_text(encoding="utf-8"))
         port = bot_port(server)
         if kind == "http":
             data["target"]["url"] = f"http://127.0.0.1:{port}/chat"
-        else:
+        elif kind == "openai":
             data["target"]["base_url"] = f"http://127.0.0.1:{port}/v1"
+        else:
+            data["target"]["url"] = f"http://127.0.0.1:{port}/"
+            data["target"]["reply_settle_ms"] = 600
         data["limits"] = {
             "max_messages_per_minute": 6000,
-            "max_parallel_conversations": 4,
-            "timeout_seconds": 5,
+            "max_parallel_conversations": 3 if kind == "browser" else 4,
+            "timeout_seconds": 20 if kind == "browser" else 5,
             "retry_pause_seconds": 0.05,
         }
         data.update(overrides)
@@ -115,3 +145,16 @@ def make_exchange(*replies: str | None, status: str = "completed", error: str | 
         started_at=now,
         finished_at=now,
     )
+
+
+def browser_target(server: DemoBotServer, path: str = "/", **fields: Any) -> dict[str, Any]:
+    """A browser target dict for the demo website, with test-friendly timings."""
+    target: dict[str, Any] = {
+        "type": "browser",
+        "url": f"http://127.0.0.1:{bot_port(server)}{path}",
+        "preset": "generic",
+        "selectors": {"frame": "iframe[data-chat-frame]"},
+        "reply_settle_ms": 600,
+    }
+    target.update(fields)
+    return target

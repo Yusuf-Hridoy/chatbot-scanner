@@ -1,0 +1,13 @@
+name: crisp
+verified: false
+description: >-
+  Best-known selectors for the Crisp chatbox (rendered in the page, no iframe). UNVERIFIED: Crisp
+  changes its markup often. Run 'audit check' first; use 'audit connect' if it fails.
+selectors:
+  frame: null
+  open_button: "a[aria-label='Open chat'], .cc-1brb6[data-visible='true'], #crisp-chatbox [data-id='chat_closed']"
+  input: "textarea[name='message_field'], #crisp-chatbox textarea"
+  send_button: null
+  bot_message: "#crisp-chatbox [data-from='operator'] .cc-1hqb, #crisp-chatbox [data-from='operator']"
+  typing_indicator: "#crisp-chatbox [data-id='message_compose_typing'], #crisp-chatbox .cc-typing"
+dismiss_selectors: []

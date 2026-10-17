@@ -1,0 +1,13 @@
+name: intercom
+verified: false
+description: >-
+  Best-known selectors for the Intercom Messenger. UNVERIFIED: Intercom changes its markup often and
+  the launcher lives in a separate iframe. Run 'audit check' first; use 'audit connect' if it fails.
+selectors:
+  frame: "iframe[name='intercom-messenger-frame']"
+  open_button: ".intercom-launcher, .intercom-lightweight-app-launcher, [aria-label='Open Intercom Messenger']"
+  input: "textarea[name='message'], [aria-label='Write a reply…'], textarea"
+  send_button: null
+  bot_message: ".intercom-block-paragraph, [data-testid='admin-message'] .intercom-comment-body"
+  typing_indicator: ".intercom-typing-indicator, [data-testid='typing-indicator']"
+dismiss_selectors: []

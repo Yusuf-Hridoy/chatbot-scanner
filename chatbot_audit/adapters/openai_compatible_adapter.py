@@ -18,6 +18,8 @@ from chatbot_audit.data_models import LimitsConfig, OpenAITargetConfig
 class OpenAICompatibleAdapter(BaseAdapter):
     """POSTs the full message history to `{base_url}/chat/completions` on every turn."""
 
+    adapter_type = "openai_compatible"
+
     def __init__(self, target: OpenAITargetConfig, limits: LimitsConfig) -> None:
         self.target = target
         self.timeout = limits.timeout_seconds

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
-from chatbot_audit.data_models import ClientConfig, HttpTargetConfig
+from chatbot_audit.data_models import BrowserTargetConfig, ClientConfig, HttpTargetConfig
 
 
 class AdapterError(Exception):
@@ -28,8 +29,16 @@ class BotReply(BaseModel):
     raw: Any | None = None
 
 
+class ConversationEvidence(BaseModel):
+    video_path: Path | None = None
+    screenshot_path: Path | None = None
+    warnings: list[str] = []      # evidence problems worth telling the user; never fatal
+
+
 class BaseAdapter(ABC):
-    """Interface every target adapter implements (HTTP, OpenAI-compatible, later browser)."""
+    """Interface every target adapter implements (HTTP, OpenAI-compatible, browser)."""
+
+    adapter_type: str | None = None
 
     @abstractmethod
     async def start_conversation(self) -> str:
@@ -38,6 +47,12 @@ class BaseAdapter(ABC):
     @abstractmethod
     async def send(self, conversation_id: str, message: str) -> BotReply:
         """Send one user message and return the bot's reply."""
+
+    async def end_conversation(
+        self, conversation_id: str, evidence_dir: Path | None, evidence_name: str
+    ) -> ConversationEvidence:
+        """Close one conversation. Adapters that record evidence save it into evidence_dir as <evidence_name>.webm/.png."""
+        return ConversationEvidence()  # default: nothing to save (HTTP/OpenAI adapters)
 
     @abstractmethod
     async def close(self) -> None:
@@ -80,4 +95,8 @@ def create_adapter(config: ClientConfig) -> BaseAdapter:
 
     if isinstance(config.target, HttpTargetConfig):
         return HttpAdapter(config.target, config.limits)
+    if isinstance(config.target, BrowserTargetConfig):
+        from chatbot_audit.adapters.browser_adapter import BrowserAdapter
+
+        return BrowserAdapter(config.target, config.limits)
     return OpenAICompatibleAdapter(config.target, config.limits)

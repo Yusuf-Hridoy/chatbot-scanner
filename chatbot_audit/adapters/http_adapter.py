@@ -45,6 +45,8 @@ def resolve_path(data: Any, path: str) -> Any:
 class HttpAdapter(BaseAdapter):
     """Talks to any JSON-over-HTTP chat endpoint that keeps session state server-side."""
 
+    adapter_type = "http"
+
     def __init__(self, target: HttpTargetConfig, limits: LimitsConfig) -> None:
         self.target = target
         self.timeout = limits.timeout_seconds

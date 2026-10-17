@@ -3,7 +3,9 @@
 A command-line tool that audits customer-facing AI chatbots. It sends scripted attack conversations
 to a bot (prompt leaks, invented discounts, wrong policies, missing AI disclosure, data leaks), checks
 every reply with deterministic rules, grades the bot from A to F, and produces a customer-ready HTML
-report (and optional PDF). Phase 1 uses no AI models: the only network traffic is to the bot under test.
+report (and optional PDF). It can talk to a bot through an HTTP API, an OpenAI-compatible endpoint, or
+the chat widget on a website using a real browser, with screenshot and video evidence. No AI models are
+used: the only network traffic is to the bot under test.
 
 ## Install
 
@@ -12,8 +14,8 @@ Requires Python 3.12.
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -e ".[pdf,dev]"
-playwright install chromium          # only needed for --pdf
+pip install -e ".[dev]"
+playwright install chromium          # required: browser targets, `audit connect` and --pdf
 ```
 
 ## Quickstart (demo bot)
@@ -64,6 +66,73 @@ runs/<run_id>/
   report.html        self-contained report (works offline)
   report.pdf         only with --pdf and Playwright installed
 ```
+
+## Auditing a website chatbot
+
+Use a `browser` target when the bot only exists as a chat widget on a website. The harness opens the
+page in Chromium, accepts the cookie banner, opens the chat, types each attack message and reads the
+reply once it stops changing. Every conversation gets a fresh browser session.
+
+1. **Pick a preset.** `audit presets` lists them. `generic` is tested and works for many simple custom
+   widgets. `intercom`, `tidio` and `crisp` are best-effort and marked UNVERIFIED.
+   ```yaml
+   target:
+     type: browser
+     url: https://staging.example-shop.com/
+     preset: generic
+     selectors:                  # optional overrides on top of the preset
+       frame: "iframe#chat"      # only if the chat lives inside an iframe
+   ```
+2. **Check it.** `audit check --config PATH` opens the page, sends "Hello", prints the reply and saves
+   `check_screenshot.png` next to the config. Look at the screenshot.
+3. **If the check fails** (the input or reply is not found), record selectors with `audit connect` and
+   paste the block it prints into your config. Then run `audit check` again.
+4. **Run the audit** as usual: `audit full --config PATH --pdf`. Add `--headed` to watch the browser.
+
+Try it on the demo website: `audit demo-bot`, then
+`audit full --config examples/demo_client/client_config_browser.yaml --pdf`. The site is at
+http://127.0.0.1:8765/ (`?frame=0` shows the chat without an iframe, `?captcha=1` adds a fake CAPTCHA).
+
+Other browser options: `dismiss_selectors` (extra overlays to click away), `reply_settle_ms` (how long the
+reply text must stay unchanged, default 1500), `page_load_timeout_seconds`, `headless`, `record_video`,
+`viewport`, and `storage_state_file` (see Safety rules). The reply timeout is `limits.timeout_seconds`.
+Browser runs use at most 3 parallel conversations.
+
+### `audit connect` walkthrough
+
+`audit connect --url https://staging.example-shop.com/ [--out target_recorded.yaml]` opens a browser
+window and asks you to click things. While it waits for a click, your click is recorded instead of
+acting on the page.
+
+1. *"The page is loading…"*
+2. *"Click the chat bubble that opens the chat. If the chat box is already open, press Enter here."*
+   Click the launcher (the tool then opens the chat for you) and press Enter in the terminal, or just
+   press Enter if the chat is already open.
+3. *"Click inside the message box where customers type."* If the box is inside an iframe, the iframe
+   is detected automatically (turn this off with `--no-frame-auto`).
+4. The tool types "Hello" and presses Enter.
+5. *"Click on the bot's reply."* The tool turns your click into a selector that matches every bot
+   message, shows the matched reply text and asks *"Is this the bot's reply? [Y/n]"*. Answer `n` to try again.
+6. *"If a typing animation appears while the bot replies, click it now during the next reply, or press
+   Enter to skip."* The tool sends "What can you help with?". Click the animation quickly, or press Enter.
+7. The `target:` block is printed and saved to `--out` (default `./target_recorded.yaml`). Paste it
+   into your client config and run `audit check`.
+
+Each click step times out after 120 seconds.
+
+## Evidence and delivery
+
+- **Browser runs** save `evidence/<attack_id>.png` (full-page screenshot at the end of the
+  conversation) and `evidence/<attack_id>.webm` (recording) in the run folder. Each finding card in the
+  report shows the screenshot and a "Watch the recording" link. The PDF shows the screenshot only.
+- **API runs (HTTP/OpenAI)** have transcript evidence only. To add video, put an `evidence_target`
+  (a browser target for the same bot's website) in the client config and run
+  `audit replay --run PATH`. Only attacks with findings are re-run; results go to `replays.jsonl` and
+  `evidence/<attack_id>.replay.png/.webm`. Findings and verdicts are not changed. Rebuild the report
+  with `audit report --run PATH`; replay evidence is labeled as recorded during a replay.
+- **Delivery:** `audit package --run PATH` writes `<client>-<run_id>-report.zip` with `report.html`,
+  `report.pdf` (if present) and only the evidence files the report links to. Raw run data
+  (`exchanges.jsonl`, `verdicts.jsonl`) and configs are never included.
 
 ## Writing a new attack
 
@@ -155,12 +224,18 @@ Secrets use `{{env.NAME}}` and are never printed; `audit validate` masks header 
 - Always set a sensible rate limit (`limits.max_messages_per_minute`).
 - Prefer staging environments over production.
 - Keep client configs and run folders **out of this code repository** (`runs/` is git-ignored as a safety net).
+- **Never try to bypass CAPTCHAs or bot protection.** If a page shows one, the harness stops with a clear
+  message. Ask the customer for a staging URL or to allowlist your IP address.
+- Use `storage_state_file` (a Playwright storage state for a logged-in session) **only with a test
+  account the customer gave you**. Never log in with real customer credentials.
 
 ## Roadmap
 
-- **Phase 1 (this release):** HTTP and OpenAI-compatible adapters, 30 rule-checked attacks, grading, HTML/PDF report, demo bot.
-- **Phase 2:** browser chat-widget adapter, LLM judge cascade, attack mutators (translations, encodings, wrappers), human triage step.
-- **Phase 3:** retest diffs between runs and white-label reports.
+- **Phase 1:** HTTP and OpenAI-compatible adapters, 30 rule-checked attacks, grading, HTML/PDF report, demo bot.
+- **Phase 2 (this release):** browser adapter for website chat widgets, widget presets, `audit connect`,
+  screenshot/video evidence, `audit replay`, `audit package`, demo website.
+- **Phase 3:** LLM judge cascade, redaction, human triage step.
+- **Phase 4:** attack mutators (translations, encodings, wrappers), retest diffs between runs, white-label reports.
 
 ## Development
 
@@ -168,4 +243,5 @@ Secrets use `{{env.NAME}}` and are never printed; `audit validate` masks header 
 pytest
 ```
 
-Tests start the demo bot on a free local port; no internet access is needed.
+Tests start the demo bot on a free local port; no internet access is needed. Tests marked `browser`
+need Chromium; without it they are skipped with "Chromium not installed. Run: playwright install chromium".

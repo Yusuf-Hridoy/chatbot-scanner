@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen Skincare chat</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-frame-page">
+<!-- The chat panel for the cross-origin-iframe lab page. It is served from a different port. -->
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body, { launcher: false, open: true });
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+</script>
+</body>
+</html>

@@ -22,6 +22,7 @@ HTTP_EXAMPLE = EXAMPLE_DIR / "client_config.yaml"
 OPENAI_EXAMPLE = EXAMPLE_DIR / "client_config_openai.yaml"
 BROWSER_EXAMPLE = EXAMPLE_DIR / "client_config_browser.yaml"
 EXAMPLES = {"http": HTTP_EXAMPLE, "openai": OPENAI_EXAMPLE, "browser": BROWSER_EXAMPLE}
+LAB_EXAMPLE_DIR = REPO_ROOT / "examples" / "widget_lab"
 CHROMIUM_SKIP_REASON = "Chromium not installed. Run: playwright install chromium"
 
 
@@ -50,7 +51,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 def _start(safe_mode: bool) -> Iterator[DemoBotServer]:
     server = make_server("127.0.0.1", 0, safe_mode)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll interval makes shutdown (after every test) quick.
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     try:
         yield server
@@ -158,3 +160,17 @@ def browser_target(server: DemoBotServer, path: str = "/", **fields: Any) -> dic
     }
     target.update(fields)
     return target
+
+
+def lab_config_data(server: DemoBotServer, name: str) -> dict[str, Any]:
+    """The widget lab config examples/widget_lab/<name>.yaml, pointed at a demo bot on a free port."""
+    data = yaml.safe_load((LAB_EXAMPLE_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
+    data["target"]["url"] = data["target"]["url"].replace("127.0.0.1:8765", f"127.0.0.1:{bot_port(server)}")
+    return data
+
+
+def write_config(folder: Path, data: dict[str, Any]) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "client_config.yaml"
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path

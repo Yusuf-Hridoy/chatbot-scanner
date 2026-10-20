@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Late load</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Late load</h1>
+  <p>The chat launcher appears 5 seconds after the page loads.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+// The widget script loads late, like a vendor script that waits until the page is idle.
+setTimeout(function () {
+  var chat = LumenLab.mount(document.body);
+  LumenLab.openOnClick(chat);
+  LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+}, 5000);
+</script>
+</body>
+</html>

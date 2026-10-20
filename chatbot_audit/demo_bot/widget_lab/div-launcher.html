@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Div launcher</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Div launcher</h1>
+  <p>The launcher is a plain div with an icon. It has no button role and no text.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body, {
+  launcherHtml:
+    '<div class="lab-bubble-icon"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="#fff" d="M4 4h16v11H8l-4 4z"/></svg></div>'
+});
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+</script>
+</body>
+</html>

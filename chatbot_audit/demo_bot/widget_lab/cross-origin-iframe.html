@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Cross-origin iframe</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Cross-origin iframe</h1>
+  <p>The chat panel is an iframe served from a different port, so it is a different origin.</p>
+</header>
+<button type="button" class="lab-launcher" aria-label="Open chat">Chat with us</button>
+<iframe class="lab-frame" src="{{FRAME_ORIGIN}}/lab/cross-origin-panel" title="Lumen Skincare chat" hidden></iframe>
+<script src="/lab/lab_common.js"></script>
+<script>
+document.querySelector(".lab-launcher").addEventListener("click", function () {
+  document.querySelector(".lab-frame").hidden = false;
+});
+</script>
+</body>
+</html>

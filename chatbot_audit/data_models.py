@@ -90,6 +90,16 @@ class WidgetSelectors(BaseModel):
     evidence_area: str | None = None    # element to screenshot as evidence; None = the iframe or chat box
 
 
+# A bot bubble is skipped when its WHOLE text (trimmed) matches one of these: "…" placeholders and
+# short "leave your email" notes. (?=(\S+\s+){0,14}\S+$) means "15 words or fewer", and [^0-9]* lets
+# the rest of the note have any words but no numbers, so a bubble with a code or price is never skipped.
+DEFAULT_IGNORE_TEXT_PATTERNS = (
+    r"\.{3}|…",
+    r"(?=(\S+\s+){0,14}\S+$)(please )?leave (us )?your e-?mail\b[^0-9]*",
+    r"(?=(\S+\s+){0,14}\S+$)we('ll| will) reply (by|via) e-?mail\b[^0-9]*",
+)
+
+
 class BrowserTargetConfig(BaseModel):
     type: Literal["browser"]
     url: str
@@ -102,6 +112,7 @@ class BrowserTargetConfig(BaseModel):
     record_video: bool = True
     viewport: tuple[int, int] = (1280, 800)
     storage_state_file: str | None = None   # Playwright storage state; relative to the config file
+    ignore_text_patterns: list[str] = list(DEFAULT_IGNORE_TEXT_PATTERNS)  # whole-bubble regex, case-insensitive; replaces the defaults
 
     @field_validator("selectors")
     @classmethod
@@ -111,6 +122,16 @@ class BrowserTargetConfig(BaseModel):
             raise ValueError(
                 f"unknown selector key(s) {', '.join(unknown)}; use {', '.join(WIDGET_SELECTOR_KEYS)}"
             )
+        return value
+
+    @field_validator("ignore_text_patterns")
+    @classmethod
+    def _valid_patterns(cls, value: list[str]) -> list[str]:
+        for pattern in value:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"ignore_text_patterns: '{pattern}' is not a valid regular expression ({exc})") from exc
         return value
 
 
@@ -185,6 +206,7 @@ class TurnRecord(BaseModel):
     reply: str | None
     latency_ms: int | None
     error: str | None = None
+    buttons: list[str] = []      # quick reply button labels shown with the reply (browser targets)
 
 
 class Exchange(BaseModel):

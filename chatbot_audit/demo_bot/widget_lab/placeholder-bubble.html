@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Placeholder bubble</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Placeholder bubble</h1>
+  <p>A bot bubble with "…" appears at once. Two seconds later the same bubble is filled with the real reply.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, async function (message) {
+  LumenLab.addBubble(chat, "user", message);
+  var bubble = LumenLab.addBubble(chat, "bot", "…");
+  var reply = await LumenLab.ask(message);
+  await LumenLab.sleep(2000);
+  bubble.textContent = reply;  // the same element, filled in place
+});
+</script>
+</body>
+</html>

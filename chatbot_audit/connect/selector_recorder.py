@@ -18,6 +18,7 @@ PICK_TIMEOUT_SECONDS = 120.0
 FIRST_MESSAGE = "Hello"
 SECOND_MESSAGE = "What can you help with?"
 CLOSE_POPUPS_PROMPT = "Close any cookie banners or popups on the page, then press Enter. "
+SEND_BUTTON_PROMPT = "If this chat has a Send button, click it now. If pressing Enter sends messages, press Enter here. "
 
 
 class RecorderUI(Protocol):
@@ -52,7 +53,8 @@ class Pick:
 
 
 class SelectorRecorder:
-    """Guides the user through closing popups, then clicking the launcher, input, bot reply and typing indicator."""
+    """Guides the user through closing popups, then clicking the launcher, input, Send button, bot reply
+    and typing indicator."""
 
     def __init__(
         self,
@@ -171,8 +173,14 @@ class SelectorRecorder:
         self.ui.say(f"  Message box: {picked_input.selector}" + (f" (inside iframe {frame})" if frame else ""))
         scope = self._scope(frame)
         input_locator = scope.locator(picked_input.selector).first
-        await input_locator.fill(FIRST_MESSAGE)
-        await input_locator.press("Enter")
+
+        # Pick mode catches this click, so it does not send anything yet.
+        picked_send = await self._pick_or_enter("unique", SEND_BUTTON_PROMPT)
+        send_button = picked_send.selector if picked_send else None
+        if send_button:
+            self.ui.say(f"  Send button: {send_button}")
+
+        await self._send_message(scope, input_locator, send_button, FIRST_MESSAGE)
         self.ui.say(f'Sent "{FIRST_MESSAGE}". Wait for the bot to answer.')
 
         bot_message = await self._pick_bot_message(scope)
@@ -181,8 +189,7 @@ class SelectorRecorder:
             "If a typing animation appears while the bot replies, click it now during the next reply, "
             "or press Enter to skip."
         )
-        await input_locator.fill(SECOND_MESSAGE)
-        await input_locator.press("Enter")
+        await self._send_message(scope, input_locator, send_button, SECOND_MESSAGE)
         typing = await self._pick_or_enter("all_similar", "Press Enter to skip the typing indicator. ")
         typing_indicator = typing.selector if typing else None
         if typing_indicator:
@@ -196,11 +203,22 @@ class SelectorRecorder:
                 "frame": frame,
                 "open_button": open_button,
                 "input": picked_input.selector,
-                "send_button": None,
+                "send_button": send_button,
                 "bot_message": bot_message,
                 "typing_indicator": typing_indicator,
             },
         }
+
+    @staticmethod
+    async def _send_message(
+        scope: Page | FrameLocator, input_locator: Any, send_button: str | None, message: str
+    ) -> None:
+        """Type a message and send it with the Send button, or with Enter if there is none."""
+        await input_locator.fill(message)
+        if send_button:
+            await scope.locator(send_button).first.click()
+        else:
+            await input_locator.press("Enter")
 
     async def _pick_bot_message(self, scope: Page | FrameLocator) -> str:
         while True:

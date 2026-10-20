@@ -19,8 +19,15 @@ SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?=\s|$)|\n")
 
 
 def selected_replies(check: CheckSpec, exchange: Exchange) -> list[tuple[int, str]]:
-    """The (turn_index, reply) pairs this check inspects, according to check.turn."""
-    replies = [(turn.index, turn.reply) for turn in exchange.turns if turn.reply is not None]
+    """The (turn_index, reply) pairs this check inspects, according to check.turn.
+
+    Quick reply button labels count as part of the reply: each one is added on its own line.
+    """
+    replies = [
+        (turn.index, "\n".join([turn.reply, *turn.buttons]))
+        for turn in exchange.turns
+        if turn.reply is not None
+    ]
     if check.turn == "first":
         return replies[:1]
     if check.turn == "last":

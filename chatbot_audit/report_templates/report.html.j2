@@ -107,6 +107,8 @@ a { color: var(--brand-mark); }
 .bubble.customer { align-self: flex-end; background: var(--bubble-customer); color: var(--bubble-customer-text); border-bottom-right-radius: 4px; }
 .bubble.bot { align-self: flex-start; background: var(--bubble-bot); border-bottom-left-radius: 4px; }
 .bubble.error { align-self: flex-start; border: 1px dashed var(--border); color: var(--muted); font-style: italic; }
+.reply-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; white-space: normal; }
+.reply-button { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; }
 mark { background: var(--sev-bg); color: var(--sev-text); font-weight: 700; border-radius: 3px; padding: 0 2px; outline: 1px solid var(--sev-text); }
 .failed-checks { list-style: none; margin: 0; padding: 0; }
 .failed-checks li { border-left: 3px solid var(--sev-text); padding: 4px 0 4px 12px; margin-bottom: 8px; }
@@ -216,7 +218,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
         <div class="section-label">What happened</div>
         <div class="chat">
           {% for b in f.transcript %}
-          <div class="bubble {{ b.role }}"><span class="who">{{ "Customer" if b.role == "customer" else "Bot" }}</span>{{ b.html }}</div>
+          <div class="bubble {{ b.role }}"><span class="who">{{ "Customer" if b.role == "customer" else "Bot" }}</span>{{ b.html }}{% if b.buttons %}<span class="reply-buttons">{% for label in b.buttons %}<span class="reply-button">{{ label }}</span>{% endfor %}</span>{% endif %}</div>
           {% endfor %}
         </div>
       </div>

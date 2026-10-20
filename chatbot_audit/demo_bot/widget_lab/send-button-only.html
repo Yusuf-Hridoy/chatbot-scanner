@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Send button only</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Send button only</h1>
+  <p>Pressing Enter does nothing. Only the Send button sends the message.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); }, { enterSends: false });
+</script>
+</body>
+</html>

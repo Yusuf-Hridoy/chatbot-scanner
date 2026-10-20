@@ -6,14 +6,15 @@ import asyncio
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 
-from chatbot_audit.adapters.base_adapter import AdapterError, create_adapter
+from chatbot_audit.adapters.base_adapter import AdapterError, BotReply, create_adapter
 from chatbot_audit.adapters.widget_preset_loader import is_verified, list_presets, load_preset
 from chatbot_audit.attacks.attack_loader import filter_by_tier, load_attacks
 from chatbot_audit.config_loader import ConfigError, config_summary, load_client_config
+from chatbot_audit.connect.check_debug import DEBUG_FOLDER, REVIEWER_NOTE
 from chatbot_audit.data_models import BrowserTargetConfig, Finding, Verdict
 from chatbot_audit.pipeline.grade_calculator import calculate_grade
 from chatbot_audit.pipeline.package_run import package_run
@@ -37,6 +38,7 @@ TierOption = Annotated[
 PdfOption = Annotated[bool, typer.Option("--pdf", help="Also print the report to PDF (needs Playwright).")]
 HeadedOption = Annotated[bool, typer.Option("--headed", help="Show the browser window (browser targets only).")]
 CHECK_SCREENSHOT = "check_screenshot"
+WAIT_NOTE_SECONDS = 10.0
 
 
 def _fail(message: str, code: int = 1) -> typer.Exit:
@@ -84,8 +86,39 @@ def validate(config: ConfigOption) -> None:
         typer.echo(f"  {category:<16}{count:>3}")
 
 
+async def _send_with_waiting_notes(adapter: Any, conversation_id: str, message: str, timeout: float) -> Any:
+    """Send one message; while waiting for the reply, print a short note every WAIT_NOTE_SECONDS."""
+
+    async def notes() -> None:
+        waited = 0.0
+        while True:
+            await asyncio.sleep(WAIT_NOTE_SECONDS)
+            waited += WAIT_NOTE_SECONDS
+            typer.echo(
+                f"Still waiting for a reply ({waited:g} s of {timeout:g} s). "
+                "If you are replying by hand, reply now in your chat inbox."
+            )
+
+    task = asyncio.create_task(notes())
+    try:
+        return await adapter.send(conversation_id, message)
+    finally:
+        task.cancel()
+
+
+def _print_debug_folder(folder: Path | None) -> None:
+    if folder is not None:
+        typer.echo(f"Debug files saved to {folder}")
+        typer.secho(REVIEWER_NOTE, bold=True)
+
+
 @app.command()
-def check(config: ConfigOption) -> None:
+def check(
+    config: ConfigOption,
+    debug: Annotated[
+        bool, typer.Option("--debug", help="Save a check_debug/ folder even when the check works (browser targets).")
+    ] = False,
+) -> None:
     """Pre-flight: send "Hello" to the bot and show the reply."""
     try:
         client_config = load_client_config(config)
@@ -96,30 +129,46 @@ def check(config: ConfigOption) -> None:
     if is_browser:
         client_config.target.record_video = False  # a screenshot is enough for a pre-flight check
         warn_if_unverified(client_config.target, typer.echo)
-    screenshot_dir = Path(config).resolve().parent if is_browser else None
+    elif debug:
+        typer.echo("Note: --debug only works for browser targets.")
+    config_dir = Path(config).resolve().parent
+    screenshot_dir = config_dir if is_browser else None
+    timeout = client_config.limits.timeout_seconds
+    debug_folder: list[Path | None] = [None]
 
-    async def ping() -> tuple[str, int, Path | None]:
+    async def ping() -> tuple[BotReply, Path | None]:
         adapter = create_adapter(client_config)
+        if is_browser:
+            adapter.debug_dir = config_dir / DEBUG_FOLDER  # a failure saves the debug folder here
         try:
             conversation_id = await adapter.start_conversation()
             try:
-                reply = await adapter.send(conversation_id, "Hello")
+                reply = await _send_with_waiting_notes(adapter, conversation_id, "Hello", timeout)
+                if debug and is_browser:
+                    await adapter.save_debug(conversation_id)
             finally:
                 evidence = await adapter.end_conversation(conversation_id, screenshot_dir, CHECK_SCREENSHOT)
-            return reply.text, reply.latency_ms, evidence.screenshot_path
+            return reply, evidence.screenshot_path
         finally:
+            debug_folder[0] = getattr(adapter, "debug_folder", None)
             await adapter.close()
 
     try:
-        text, latency, screenshot = asyncio.run(ping())
+        reply, screenshot = asyncio.run(ping())
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
     except AdapterError as exc:
-        raise _fail(f"The chatbot is not reachable. {exc}", code=2) from exc
+        typer.secho(f"Error: The chatbot is not reachable. {exc}", fg=typer.colors.RED, err=True)
+        _print_debug_folder(debug_folder[0])
+        raise typer.Exit(2) from exc
     typer.secho(f"Connected to {client_config.display_name} ({client_config.target.type}).", fg=typer.colors.GREEN)
-    typer.echo(f"Sent:    Hello\nReply:   {text}\nLatency: {latency} ms")
+    typer.echo(f"Sent:    Hello\nReply:   {reply.text}")
+    if reply.buttons:
+        typer.echo(f"Buttons: {', '.join(reply.buttons)}")
+    typer.echo(f"Latency: {reply.latency_ms} ms")
     if screenshot:
         typer.echo(f"Screenshot: {screenshot}")
+    _print_debug_folder(debug_folder[0])
 
 
 @app.command()

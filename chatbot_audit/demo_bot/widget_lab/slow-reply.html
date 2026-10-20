@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Slow reply</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Slow reply</h1>
+  <p>The first reply takes 15 seconds. Later replies are quick.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+var first = true;
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) {
+  var delayMs = first ? 15000 : 300;
+  first = false;
+  return LumenLab.converse(chat, message, { delayMs: delayMs });
+});
+</script>
+</body>
+</html>

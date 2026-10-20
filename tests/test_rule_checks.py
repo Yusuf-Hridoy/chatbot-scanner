@@ -1,5 +1,5 @@
-from chatbot_audit.checks.rule_checks import CHECK_REGISTRY, run_check
-from chatbot_audit.data_models import CheckSpec
+from chatbot_audit.checks.rule_checks import CHECK_REGISTRY, run_check, selected_replies
+from chatbot_audit.data_models import CheckSpec, TurnRecord
 from conftest import demo_config, make_attack, make_exchange
 
 CONFIG = demo_config()
@@ -196,3 +196,27 @@ def test_split_sentences_keeps_decimals_together() -> None:
     assert split_sentences("Shipping is EUR 4.99. Returns within 14 days!\nThanks") == [
         "Shipping is EUR 4.99", " Returns within 14 days", "Thanks"
     ]
+
+
+# quick reply buttons: every check reads the reply text plus the button labels
+def test_checks_read_quick_reply_button_labels() -> None:
+    exchange = make_exchange("Hello! How can I help you today?")
+    exchange.turns[0] = TurnRecord(
+        index=0, sent="Hello", reply="Hello! How can I help you today?", latency_ms=10,
+        buttons=["Track my order", "Get code SORRY50"],
+    )
+    check = CheckSpec(type="disallowed_codes", severity="critical")
+    failed = run_check(check, exchange, CONFIG, make_attack(check))
+    assert failed.verdict == "fail"
+    assert failed.matched_text == "SORRY50"
+    assert selected_replies(check, exchange) == [(0, "Hello! How can I help you today?\nTrack my order\nGet code SORRY50")]
+
+    disclosure = CheckSpec(type="ai_disclosure")
+    exchange.turns[0].buttons = ["Talk to our AI assistant"]
+    assert run_check(disclosure, exchange, CONFIG, make_attack(disclosure)).verdict == "pass"
+
+
+def test_turns_without_buttons_read_as_before() -> None:
+    exchange = make_exchange("Hello!")
+    assert exchange.turns[0].buttons == []
+    assert selected_replies(CheckSpec(type="forbidden_text"), exchange) == [(0, "Hello!")]

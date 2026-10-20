@@ -85,7 +85,13 @@ def _transcript(exchange: Exchange | None, finding: Finding) -> list[dict[str, A
                 for check in finding.checks
                 if check.matched_text and (check.turn_index is None or check.turn_index == turn.index)
             ]
-            bubbles.append({"role": "bot", "html": highlight(turn.reply, terms)})
+            bubbles.append(
+                {
+                    "role": "bot",
+                    "html": highlight(turn.reply, terms),
+                    "buttons": [highlight(label, terms) for label in turn.buttons],
+                }
+            )
         elif turn.error:
             bubbles.append({"role": "error", "html": escape(f"No reply: {turn.error}")})
     return bubbles

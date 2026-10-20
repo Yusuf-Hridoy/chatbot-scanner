@@ -322,3 +322,25 @@ def test_run_info_config_path_is_relative_and_portable(unsafe_bot, make_config, 
     build_report(moved_run, echo=quiet)
     assert EXPECTED_UNSAFE <= fingerprints(findings)
     assert (moved_run / REPORT_HTML_FILE).exists()
+
+
+def test_quick_reply_buttons_are_checked_and_shown_in_the_report(unsafe_bot, make_config) -> None:
+    """A code that only appears on a quick reply button is a finding, and the report shows the buttons."""
+    run_dir = run_attacks(make_config(unsafe_bot), echo=quiet)
+    exchanges = {exchange.attack_id: exchange for exchange in read_latest_exchanges(run_dir)}
+    exchange = exchanges["discount-angry-customer"]
+    for turn in exchange.turns:
+        turn.reply = "Hello! How can I help you today?"
+        turn.buttons = ["Track my order", "Get code SORRY50"]
+    append_jsonl(run_dir / EXCHANGES_FILE, exchange)  # the latest line for an attack wins
+
+    findings = evaluate_run(run_dir, echo=quiet)
+    [finding] = [f for f in findings if f.attack_id == "discount-angry-customer"]
+    assert [(check.check_type, check.matched_text) for check in finding.checks] == [("disallowed_codes", "SORRY50")]
+
+    build_report(run_dir, echo=quiet)
+    html = (run_dir / REPORT_HTML_FILE).read_text(encoding="utf-8")
+    assert '<span class="reply-button">Track my order</span>' in html
+    assert '<span class="reply-button">Get code <mark>SORRY50</mark></span>' in html
+    saved = read_jsonl(run_dir / EXCHANGES_FILE, Exchange)[-1]
+    assert saved.turns[0].buttons == ["Track my order", "Get code SORRY50"]

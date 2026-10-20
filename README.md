@@ -87,8 +87,9 @@ reply once it stops changing. Every conversation gets a fresh browser session.
 2. **Check it.** `audit check --config PATH` opens the page, sends "Hello", prints the reply and saves
    `check_screenshot.png` (chat area) and `check_screenshot.page.png` (full page) next to the config.
    Look at the screenshot.
-3. **If the check fails** (the input or reply is not found), record selectors with `audit connect` and
-   paste the block it prints into your config. Then run `audit check` again.
+3. **If the check fails** (the input or reply is not found), `audit check` saves a `check_debug/` folder
+   next to the config (see below). Record selectors with `audit connect` and paste the block it prints
+   into your config. Then run `audit check` again.
 4. **Run the audit** as usual: `audit full --config PATH --pdf`. Add `--headed` to watch the browser.
 
 Try it on the demo website: `audit demo-bot`, then
@@ -96,9 +97,70 @@ Try it on the demo website: `audit demo-bot`, then
 http://127.0.0.1:8765/ (`?frame=0` shows the chat without an iframe, `?captcha=1` adds a fake CAPTCHA).
 
 Other browser options: `dismiss_selectors` (extra overlays to click away), `reply_settle_ms` (how long the
-reply text must stay unchanged, default 1500), `page_load_timeout_seconds`, `headless`, `record_video`,
-`viewport`, and `storage_state_file` (see Safety rules). The reply timeout is `limits.timeout_seconds`.
+reply text must stay unchanged, default 1500), `page_load_timeout_seconds` (how long to wait for the page
+and for the chat to show up, default 30), `headless`, `record_video`, `viewport`, and
+`storage_state_file` (see Safety rules). The reply timeout is `limits.timeout_seconds`.
 Browser runs use at most 3 parallel conversations.
+
+How replies are read:
+
+- Before each message, the harness marks every bot message already on the page. The reply is made of
+  the bot messages that appear after that, so welcome messages and old messages are never part of it.
+  This also works for widgets that remove old messages from the page.
+- Buttons inside a bot message (quick replies) are kept apart from the reply text. Their labels are
+  saved with the reply, every rule check reads them too, and the report shows them as small grey
+  labels under the bot's message. So a code on a button (for example "Get code SORRY50") is a finding.
+- `ignore_text_patterns` (under `target:`) lists bot messages to skip, as regular expressions (not
+  case-sensitive). A message is skipped only when its whole text matches a pattern, so a real reply
+  that just mentions the same words is still checked. The defaults skip "…" placeholders and short
+  "leave your email" notes (15 words or fewer, with no numbers in them):
+  ```yaml
+  ignore_text_patterns:
+    - '\.{3}|…'
+    - '(?=(\S+\s+){0,14}\S+$)(please )?leave (us )?your e-?mail\b[^0-9]*'
+    - "(?=(\\S+\\s+){0,14}\\S+$)we('ll| will) reply (by|via) e-?mail\\b[^0-9]*"
+  ```
+  `(?=(\S+\s+){0,14}\S+$)` at the start means "15 words or fewer".
+  If you set this list, it replaces the defaults, so copy the ones you still want.
+
+### When `audit check` fails: the debug folder
+
+When `audit check` fails on a website chat, it saves a `check_debug/` folder next to the config. Run
+`audit check --config PATH --debug` to save it even when the check works. The folder holds:
+
+- `page.png`: a screenshot of the whole page.
+- `frames.json`: every frame on the page, with the selector of its iframe.
+- `candidates.json`: elements that look like a chat launcher, message box or bot message, in every frame
+  and shadow root.
+- `summary.txt`: which step failed (page load, launcher, input or reply), the selector that was used,
+  and the 3 most likely elements to use instead.
+
+It never holds cookies, stored data or text typed into the page. Send this folder to your reviewer to
+fix the selectors.
+
+While `audit check` waits for a reply, it prints a short note every 10 seconds, so you know it is still
+working (useful when you reply by hand from a chat inbox).
+
+### Widget lab
+
+Real chat widgets are messier than the demo shop. The widget lab is a set of small local pages that copy
+the hard patterns real widgets use: shadow DOM, a chat iframe from another origin, welcome messages,
+"leave your email" bubbles, lists that drop old messages, "…" placeholders, a contenteditable message
+box, a launcher that loads late, a launcher that is a plain div, Enter that does not send, quick reply
+buttons and a slow first reply.
+
+Start the demo bot (`audit demo-bot`) and open http://127.0.0.1:8765/lab to see them. Each page has a
+config in `examples/widget_lab/`, for example:
+
+```bash
+audit check --config examples/widget_lab/shadow-dom.yaml
+audit full --config examples/widget_lab/shadow-dom.yaml
+```
+
+### Testing a real chat widget
+
+`examples/real_widget_test/` is a kit for testing a real Crisp chat widget with a free account. Follow
+`examples/real_widget_test/HOW_TO_TEST.md`.
 
 ### `audit connect` walkthrough
 
@@ -114,7 +176,9 @@ click is recorded instead of acting on the page.
    press Enter if the chat is already open.
 4. *"Click inside the message box where customers type."* If the box is inside an iframe, the iframe
    is detected automatically (turn this off with `--no-frame-auto`).
-5. The tool types "Hello" and presses Enter.
+5. *"If this chat has a Send button, click it now. If pressing Enter sends messages, press Enter here."*
+   Click the Send button (it is recorded, not pressed) and press Enter in the terminal, or just press
+   Enter. Then the tool types "Hello" and sends it the same way.
 6. *"Click on the bot's reply."* The tool turns your click into a selector that matches every bot
    message, shows the matched reply text and asks *"Is this the bot's reply? [Y/n]"*. Answer `n` to try again.
 7. *"If a typing animation appears while the bot replies, click it now during the next reply, or press
@@ -184,7 +248,9 @@ reported with the file and field name.
 
 ## Setting up a new client
 
-Copy `examples/demo_client/client_config.yaml` into a new folder **outside this repository** and edit it.
+Copy `examples/demo_client/client_config.yaml` into a new folder and edit it. Keep real customer
+folders in `clients/` (for example `clients/acme/client_config.yaml`). Git ignores `clients/`, so
+customer configs and results are never committed. A folder outside this repository works too.
 Runs are written next to the config, in `<config folder>/runs/`.
 
 **Target — generic HTTP** (bot keeps conversation state server-side):
@@ -230,7 +296,8 @@ Secrets use `{{env.NAME}}` and are never printed; `audit validate` masks header 
 - Only test chatbots you have **written permission** to test.
 - Always set a sensible rate limit (`limits.max_messages_per_minute`).
 - Prefer staging environments over production.
-- Keep client configs and run folders **out of this code repository** (`runs/` is git-ignored as a safety net).
+- Keep real client configs and run folders in `clients/` or outside this repository. Git ignores
+  `clients/`, `runs/` and `check_debug/` as a safety net.
 - **Never try to bypass CAPTCHAs or bot protection.** If a page shows one, the harness stops with a clear
   message. Ask the customer for a staging URL or to allowlist your IP address.
 - Use `storage_state_file` (a Playwright storage state for a logged-in session) **only with a test
@@ -239,12 +306,24 @@ Secrets use `{{env.NAME}}` and are never printed; `audit validate` masks header 
 ## Roadmap
 
 - **Phase 1:** HTTP and OpenAI-compatible adapters, 30 rule-checked attacks, grading, HTML/PDF report, demo bot.
-- **Phase 2 (this release):** browser adapter for website chat widgets, widget presets, `audit connect`,
+- **Phase 2:** browser adapter for website chat widgets, widget presets, `audit connect`,
   screenshot/video evidence, `audit replay`, `audit package`, demo website.
+- **Phase 2.2 (this release):** widget lab, sturdier reply reading, `audit check` debug folder, kit for
+  testing a real Crisp widget, faster tests.
 - **Phase 3:** LLM judge cascade, redaction, human triage step.
 - **Phase 4:** attack mutators (translations, encodings, wrappers), retest diffs between runs, white-label reports.
 
 ## Development
+
+### Running tests
+
+For daily work, run the fast tests. They skip the two full 30-attack browser runs:
+
+```bash
+pytest -m "not slow"
+```
+
+Before you share changes, run all the tests:
 
 ```bash
 pytest

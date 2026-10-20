@@ -110,7 +110,10 @@ async def test_captcha_stops_without_retry(unsafe_bot) -> None:
 
 async def test_wrong_input_selector_suggests_audit_connect(unsafe_bot) -> None:
     adapter = make_adapter(
-        unsafe_bot, timeout=3, selectors={"frame": "iframe[data-chat-frame]", "input": "#no-such-input"}
+        unsafe_bot,
+        timeout=3,
+        page_load_timeout_seconds=3,
+        selectors={"frame": "iframe[data-chat-frame]", "input": "#no-such-input"},
     )
     try:
         with pytest.raises(AdapterError) as excinfo:
@@ -120,6 +123,7 @@ async def test_wrong_input_selector_suggests_audit_connect(unsafe_bot) -> None:
     assert excinfo.value.retryable is False
     assert "#no-such-input" in str(excinfo.value)
     assert "audit connect" in str(excinfo.value)
+    assert excinfo.value.step == "input"
 
 
 @pytest.mark.parametrize("record_video", [True, False])

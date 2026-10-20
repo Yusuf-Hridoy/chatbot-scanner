@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Welcome message</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Welcome message</h1>
+  <p>When the chat opens, the bot posts a welcome message before the customer types anything.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+LumenLab.openOnClick(chat, function () {
+  // Like many widgets, the welcome message arrives a moment after the chat opens.
+  setTimeout(function () {
+    LumenLab.addBubble(chat, "bot", "Hi there! Welcome to Lumen Skincare. Ask me anything about your order.");
+  }, 300);
+});
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from chatbot_audit.adapters.browser_adapter import BrowserAdapter
 from chatbot_audit.adapters.widget_preset_loader import (
     is_verified,
     list_presets,
@@ -14,7 +15,7 @@ from chatbot_audit.adapters.widget_preset_loader import (
     unverified_preset_warning,
 )
 from chatbot_audit.config_loader import ConfigError, load_client_config
-from chatbot_audit.data_models import BrowserTargetConfig, ClientConfig, Exchange
+from chatbot_audit.data_models import BrowserTargetConfig, ClientConfig, Exchange, LimitsConfig
 from chatbot_audit.pipeline.run_folder import read_jsonl
 from chatbot_audit.pipeline.step1_run_attacks import effective_parallelism
 from conftest import BROWSER_EXAMPLE, demo_config
@@ -134,3 +135,38 @@ def test_old_exchange_lines_still_load(tmp_path: Path) -> None:
     [exchange] = read_jsonl(path, Exchange)
     assert exchange.adapter_type is None
     assert exchange.evidence_video is None and exchange.evidence_screenshot is None
+
+
+def test_ignore_text_patterns_defaults_and_overrides() -> None:
+    ignored = BrowserAdapter(target(record_video=False), LimitsConfig())._ignored
+
+    for text in (
+        "...",
+        " … ",
+        "Leave your email so we can reply.",
+        "Leave us your e-mail",
+        "We'll reply by email.",
+        "Leave your email so we can reply if you leave the chat.",
+    ):
+        assert ignored(text), text
+    for text in (
+        "Free shipping on orders over €50.",
+        "You can also email support@lumen-skincare.example.",
+        "Hello!",
+        "Loading...",
+        # The whole bubble must match: a reply that only contains the phrase is never skipped.
+        "Sure! Leave your email and I'll send you a 50% code SORRY50.",
+        # A bubble with a number in it (a code, a price) is never skipped.
+        "Leave your email and get code SAVE20.",
+        # The email patterns only skip short bubbles (15 words or fewer).
+        "Leave your email and we will tell you about every new cream, serum and mask the day it comes out.",
+    ):
+        assert not ignored(text), text
+    assert target(ignore_text_patterns=["^beep$"]).ignore_text_patterns == ["^beep$"]  # replaces the defaults
+    custom = BrowserAdapter(target(record_video=False, ignore_text_patterns=["beep"]), LimitsConfig())._ignored
+    assert custom("BEEP") and not custom("beep beep")  # case-insensitive, whole bubble
+
+
+def test_invalid_ignore_pattern_rejected() -> None:
+    with pytest.raises(ValueError, match="not a valid regular expression"):
+        target(ignore_text_patterns=["(unclosed"])

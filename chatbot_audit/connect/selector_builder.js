@@ -55,9 +55,24 @@
     return result;
   }
 
-  function matchCount(root, selector) {
+  // The document plus every open shadow root in it. Playwright CSS selectors look inside open shadow
+  // roots too, so a selector is unique only if it matches one element across all of them.
+  function searchRoots() {
+    var roots = [document];
+    for (var i = 0; i < roots.length; i++) {
+      var all = roots[i].querySelectorAll("*");
+      for (var j = 0; j < all.length; j++) {
+        if (all[j].shadowRoot) roots.push(all[j].shadowRoot);
+      }
+    }
+    return roots;
+  }
+
+  function matchCount(selector) {
     try {
-      return root.querySelectorAll(selector).length;
+      return searchRoots().reduce(function (total, root) {
+        return total + root.querySelectorAll(selector).length;
+      }, 0);
     } catch (error) {
       return -1;
     }
@@ -86,7 +101,6 @@
   }
 
   function uniqueSelector(element) {
-    var root = element.ownerDocument;
     var tag = element.tagName.toLowerCase();
     var classes = stableClasses(element);
     var tiers = [
@@ -108,7 +122,7 @@
       ),
     ];
     for (var i = 0; i < tiers.length; i++) {
-      var unique = tiers[i].filter(function (selector) { return matchCount(root, selector) === 1; });
+      var unique = tiers[i].filter(function (selector) { return matchCount(selector) === 1; });
       if (unique.length) {
         return unique.sort(function (a, b) { return a.length - b.length; })[0];
       }
@@ -151,7 +165,10 @@
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      var target = event.target && event.target.nodeType === 1 ? event.target : event.target.parentElement;
+      // Inside a shadow root, event.target is the host element; the composed path starts at the real one.
+      var path = event.composedPath ? event.composedPath() : [];
+      var target = path.length ? path[0] : event.target;
+      if (target && target.nodeType !== 1) target = target.parentElement;
       if (typeof window.__auditPick === "function") {
         window.__auditPick({
           selector: window.__auditBuildSelector(target, mode),

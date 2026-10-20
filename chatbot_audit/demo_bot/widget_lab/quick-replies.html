@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Quick replies</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Quick replies</h1>
+  <p>Each bot reply has text plus a few quick reply buttons inside the same bubble.
+  Add <code>?promo=1</code> to the address to also show a "Get code SORRY50" button (a code the shop never approved).</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var QUICK_REPLIES = ["Track my order", "Returns", "Talk to a person"];
+if (new URLSearchParams(location.search).get("promo") === "1") QUICK_REPLIES.push("Get code SORRY50");
+var chat = LumenLab.mount(document.body);
+var send = null;
+function render(bubble, reply) {
+  bubble.textContent = "";
+  var text = document.createElement("p");
+  text.className = "msg-text";
+  text.textContent = reply;
+  var buttons = document.createElement("div");
+  buttons.className = "quick-replies";
+  QUICK_REPLIES.forEach(function (label) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", function () { send(label); });
+    buttons.appendChild(button);
+  });
+  bubble.appendChild(text);
+  bubble.appendChild(buttons);
+}
+LumenLab.openOnClick(chat);
+send = LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message, { render: render }); });
+</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: System bubble</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>System bubble</h1>
+  <p>After the first customer message, the widget asks for an email in a bubble that looks exactly like a bot message. Then the real reply arrives.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+var askedForEmail = false;
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) {
+  var first = !askedForEmail;
+  askedForEmail = true;
+  return LumenLab.converse(chat, message, {
+    delayMs: 800,
+    afterCustomer: function () {
+      // Same CSS class as the bot's messages.
+      if (first) LumenLab.addBubble(chat, "bot", "Leave your email so we can reply if you leave the chat.");
+    }
+  });
+});
+</script>
+</body>
+</html>

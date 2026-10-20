@@ -101,6 +101,27 @@ async def test_all_similar_walks_up_to_an_ancestor_with_hooks(static_page: Page)
     assert await build(static_page, "b", "all_similar") == 'div[data-author="bot"]'
 
 
+SHADOW_PAGE = """
+<lumen-chat></lumen-chat>
+<script>
+  const root = document.querySelector("lumen-chat").attachShadow({ mode: "open" });
+  root.innerHTML = '<div class="panel"><div class="msg bot">Hi</div><div class="msg bot">Hello again</div>'
+    + '<textarea class="box" aria-label="Message"></textarea></div>';
+</script>
+"""
+
+
+async def test_selectors_inside_an_open_shadow_root(static_page: Page) -> None:
+    await static_page.set_content(SHADOW_PAGE)
+    await static_page.add_script_tag(path=str(SELECTOR_BUILDER_JS))
+    unique = await build(static_page, "textarea")  # Playwright CSS reaches into the shadow root
+    assert unique == '[aria-label="Message"]'
+    assert await count(static_page, unique) == 1
+    similar = await build(static_page, "text=Hello again", "all_similar")
+    assert similar == "div.msg.bot"
+    assert await count(static_page, similar) == 2
+
+
 # ---------------------------------------------------------------- recorder flow (scripted clicks)
 
 

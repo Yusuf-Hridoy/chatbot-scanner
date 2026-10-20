@@ -8,3 +8,5 @@ check_screenshot.page.png
 target_recorded.yaml
 *.zip
 .env
+check_debug/
+clients/

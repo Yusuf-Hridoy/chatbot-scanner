@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Shadow DOM</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Shadow DOM</h1>
+  <p>The whole widget lives inside an open shadow root on a custom element.</p>
+</header>
+<lumen-chat></lumen-chat>
+<script src="/lab/lab_common.js"></script>
+<script>
+customElements.define("lumen-chat", class extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    var root = this.attachShadow({ mode: "open" });
+    root.innerHTML = '<link rel="stylesheet" href="/lab/lab.css">';
+    var chat = LumenLab.mount(root);
+    LumenLab.openOnClick(chat);
+    LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+  }
+});
+</script>
+</body>
+</html>

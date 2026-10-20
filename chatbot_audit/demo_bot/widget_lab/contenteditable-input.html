@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Contenteditable input</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Contenteditable input</h1>
+  <p>The message box is a div with contenteditable, not a textarea.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body, {
+  inputHtml: '<div class="lab-input" contenteditable="true" role="textbox" aria-label="Message"></div>'
+});
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+</script>
+</body>
+</html>

@@ -85,7 +85,11 @@ async def run_conversation(
                 error = str(exc)
                 turns.append(TurnRecord(index=index, sent=message, reply=None, latency_ms=None, error=error))
                 break
-            turns.append(TurnRecord(index=index, sent=message, reply=reply.text, latency_ms=reply.latency_ms))
+            turns.append(
+                TurnRecord(
+                    index=index, sent=message, reply=reply.text, latency_ms=reply.latency_ms, buttons=reply.buttons
+                )
+            )
     except AdapterError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 - a bug in one conversation must not stop the run

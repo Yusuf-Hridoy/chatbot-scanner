@@ -34,10 +34,14 @@ chatbot_audit = [
     "adapters/widget_presets/*.yaml",
     "connect/*.js",
     "demo_bot/demo_site/*",
+    "demo_bot/widget_lab/*",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-markers = ["browser: needs Chromium (skipped with a clear reason when it is not installed)"]
+markers = [
+    "browser: needs Chromium (skipped with a clear reason when it is not installed)",
+    "slow: full 30-attack end-to-end runs; skip them for daily work with -m \"not slow\"",
+]

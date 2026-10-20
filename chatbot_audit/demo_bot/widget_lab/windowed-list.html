@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Windowed list</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Windowed list</h1>
+  <p>Only the last 4 messages stay on the page. Older messages are removed.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var KEEP = 4;
+var chat = LumenLab.mount(document.body);
+new MutationObserver(function () {
+  while (chat.messages.children.length > KEEP) chat.messages.firstElementChild.remove();
+}).observe(chat.messages, { childList: true });
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message); });
+</script>
+</body>
+</html>

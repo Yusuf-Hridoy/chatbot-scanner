@@ -16,17 +16,24 @@ class AdapterError(Exception):
     """Any failure talking to the chatbot: network, timeout, bad status, missing reply.
 
     `retryable` is True only for timeouts, connection errors and HTTP 5xx responses.
+    Browser errors also name the `step` that failed ("page load", "launcher", "input" or "reply")
+    and the `selector` used for it, for the `audit check` debug folder.
     """
 
-    def __init__(self, message: str, retryable: bool = False) -> None:
+    def __init__(
+        self, message: str, retryable: bool = False, step: str | None = None, selector: str | None = None
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.step = step
+        self.selector = selector
 
 
 class BotReply(BaseModel):
     text: str
     latency_ms: int
     raw: Any | None = None
+    buttons: list[str] = []       # quick reply button labels inside the reply (browser adapter only)
 
 
 class ConversationEvidence(BaseModel):

@@ -38,6 +38,26 @@ CHAT_BOX_JS = """(input, botSelector) => {
 }"""
 PAGE_SCREENSHOT_SUFFIX = ".page.png"
 AREA_SCREENSHOT_TIMEOUT_MS = 5000
+# Bot messages already on the page before a send get this mark; a new message is one without it.
+SEEN_ATTRIBUTE = "data-audit-seen"
+MARK_SEEN_JS = "(elements, mark) => elements.forEach(el => el.setAttribute(mark, '1'))"
+# [already seen?, text, button labels] per bot message. Buttons inside a bubble (quick replies) are kept
+# apart from the text, and an element inside another matched element is skipped (a selector list can match both).
+READ_BUBBLES_JS = r"""(elements, mark) => elements.filter(
+  el => !elements.some(other => other !== el && other.contains(el))
+).map(el => {
+  const controls = Array.from(el.querySelectorAll("button, [role='button']"));
+  let text = el.innerText;
+  if (controls.length) {
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll("button, [role='button']").forEach(button => button.remove());
+    text = copy.textContent.replace(/\s+/g, " ");
+  }
+  const labels = controls
+    .map(button => (button.innerText || button.textContent || "").replace(/\s+/g, " ").trim())
+    .filter(label => label);
+  return [el.hasAttribute(mark), (text || "").trim(), labels];
+})"""
 
 Scope = Page | FrameLocator
 
@@ -64,6 +84,9 @@ class BrowserAdapter(BaseAdapter):
         self.timeout = limits.timeout_seconds
         self.selectors = resolve_selectors(target)
         self.dismiss_selectors = resolve_dismiss_selectors(target)
+        self.ignore_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in target.ignore_text_patterns]
+        self.debug_dir: Path | None = None      # set by `audit check`: where a failure saves its debug folder
+        self.debug_folder: Path | None = None   # the debug folder once it is written
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._launch_lock = asyncio.Lock()
@@ -93,6 +116,7 @@ class BrowserAdapter(BaseAdapter):
             options["record_video_dir"] = str(self._video_root / uuid.uuid4().hex)
             options["record_video_size"] = options["viewport"]
         context = await browser.new_context(**options)
+        page: Page | None = None
         try:
             page = await context.new_page()
             await self._load_page(page)
@@ -100,7 +124,10 @@ class BrowserAdapter(BaseAdapter):
             await self._dismiss_overlays(page)
             scope: Scope = page.frame_locator(self.selectors.frame) if self.selectors.frame else page
             await self._open_chat(page, scope)
-        except BaseException:
+            await self._wait_for_quiet(scope)
+        except BaseException as exc:
+            if isinstance(exc, AdapterError) and page is not None:
+                await self._save_debug(page, exc)
             await context.close()
             raise
         conversation_id = str(uuid.uuid4())
@@ -112,7 +139,10 @@ class BrowserAdapter(BaseAdapter):
             await page.goto(self.target.url, timeout=self.target.page_load_timeout_seconds * 1000)
         except PlaywrightError as exc:
             raise AdapterError(
-                f"The page {self.target.url} did not load: {_first_line(exc)}", retryable=True
+                f"The page {self.target.url} did not load: {_first_line(exc)}",
+                retryable=True,
+                step="page load",
+                selector=self.target.url,
             ) from exc
 
     async def _check_for_captcha(self, page: Page) -> None:
@@ -124,7 +154,7 @@ class BrowserAdapter(BaseAdapter):
             except PlaywrightError:
                 pass  # detached or cross-origin frame: its URL is still checked
             if any(CAPTCHA_RE.search(source or "") for source in sources):
-                raise AdapterError(CAPTCHA_MESSAGE)
+                raise AdapterError(CAPTCHA_MESSAGE, step="page load", selector=self.target.url)
 
     async def _dismiss_overlays(self, page: Page) -> None:
         """Click cookie banners and similar overlays that become visible within 2 seconds."""
@@ -142,10 +172,14 @@ class BrowserAdapter(BaseAdapter):
             await asyncio.sleep(APPEAR_POLL_SECONDS)
 
     async def _open_chat(self, page: Page, scope: Scope) -> None:
-        """Wait for the input; click the launcher first if the chat box is closed."""
+        """Wait for the input; click the launcher first if the chat box is closed.
+
+        Widgets often load late, so this waits up to page_load_timeout_seconds.
+        """
         input_locator = scope.locator(self.selectors.input).first
         open_selector = self.selectors.open_button
-        deadline = time.monotonic() + self.timeout
+        wait_seconds = self.target.page_load_timeout_seconds
+        deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
             if await self._visible(input_locator):
                 return
@@ -157,7 +191,9 @@ class BrowserAdapter(BaseAdapter):
                     except PlaywrightError as exc:
                         raise AdapterError(
                             f"Could not click the chat launcher '{open_selector}': {_first_line(exc)}. "
-                            "Run 'audit connect' to record selectors for this site."
+                            "Run 'audit connect' to record selectors for this site.",
+                            step="launcher",
+                            selector=open_selector,
                         ) from exc
                     await self._wait_visible(input_locator, deadline)
                     return
@@ -166,8 +202,10 @@ class BrowserAdapter(BaseAdapter):
         if open_selector:
             searched += f" or open button '{open_selector}'"
         raise AdapterError(
-            f"Could not find the chat {searched} within {self.timeout:g} seconds. "
-            "Run 'audit connect' to record selectors for this site."
+            f"Could not find the chat {searched} within {wait_seconds:g} seconds. "
+            "Run 'audit connect' to record selectors for this site.",
+            step="launcher" if open_selector else "input",
+            selector=open_selector or self.selectors.input,
         )
 
     async def _wait_visible(self, locator: Any, deadline: float) -> None:
@@ -177,8 +215,32 @@ class BrowserAdapter(BaseAdapter):
             await asyncio.sleep(APPEAR_POLL_SECONDS)
         raise AdapterError(
             f"The chat input '{self.selectors.input}' did not appear after opening the chat. "
-            "Run 'audit connect' to record selectors for this site."
+            "Run 'audit connect' to record selectors for this site.",
+            step="input",
+            selector=self.selectors.input,
         )
+
+    async def _wait_for_quiet(self, scope: Scope) -> None:
+        """Let messages that arrive as the chat opens (welcome messages) finish before the first send.
+
+        Waits until the bot messages stay unchanged for reply_settle_ms.
+        """
+        bot_messages = scope.locator(self.selectors.bot_message)
+        settle_seconds = self.target.reply_settle_ms / 1000
+        deadline = time.monotonic() + self.target.page_load_timeout_seconds
+        last: list[str] | None = None
+        stable_since = time.monotonic()
+        while time.monotonic() < deadline:
+            try:
+                texts = await bot_messages.all_inner_texts()
+            except PlaywrightError:
+                return
+            now = time.monotonic()
+            if texts != last:
+                last, stable_since = texts, now
+            elif now - stable_since >= settle_seconds:
+                return
+            await asyncio.sleep(SETTLE_POLL_SECONDS)
 
     @staticmethod
     async def _visible(locator: Any) -> bool:
@@ -198,10 +260,17 @@ class BrowserAdapter(BaseAdapter):
 
     async def send(self, conversation_id: str, message: str) -> BotReply:
         conversation = self._conversations[conversation_id]
+        try:
+            return await self._send(conversation, message)
+        except AdapterError as exc:
+            await self._save_debug(conversation.page, exc)
+            raise
+
+    async def _send(self, conversation: _Conversation, message: str) -> BotReply:
         scope = conversation.scope
         bot_messages = scope.locator(self.selectors.bot_message)
         try:
-            before = await bot_messages.count()
+            await bot_messages.evaluate_all(MARK_SEEN_JS, SEEN_ATTRIBUTE)
             input_locator = scope.locator(self.selectors.input).first
             await input_locator.fill(message, timeout=self.timeout * 1000)
             if self.selectors.send_button:
@@ -211,20 +280,47 @@ class BrowserAdapter(BaseAdapter):
         except PlaywrightError as exc:
             raise AdapterError(
                 f"Could not type into the chat input '{self.selectors.input}': {_first_line(exc)}. "
-                "Run 'audit connect' to record selectors for this site."
+                "Run 'audit connect' to record selectors for this site.",
+                step="input",
+                selector=self.selectors.input,
             ) from exc
         submitted = time.monotonic()
         try:
-            return await self._read_reply(scope, bot_messages, before, submitted)
+            return await self._read_reply(scope, bot_messages, submitted)
         except PlaywrightError as exc:
-            raise AdapterError(f"The chat page stopped responding: {_first_line(exc)}", retryable=True) from exc
+            raise AdapterError(
+                f"The chat page stopped responding: {_first_line(exc)}",
+                retryable=True,
+                step="reply",
+                selector=self.selectors.bot_message,
+            ) from exc
 
-    async def _read_reply(self, scope: Scope, bot_messages: Any, before: int, submitted: float) -> BotReply:
-        """Wait for new bot bubbles, the typing indicator to go away, and the text to settle."""
+    def _ignored(self, text: str) -> bool:
+        """True if the whole bubble text matches an ignore_text_patterns entry."""
+        text = text.strip()
+        return any(pattern.fullmatch(text) for pattern in self.ignore_patterns)
+
+    async def _new_bot_messages(self, bot_messages: Any) -> tuple[list[str], list[str], int]:
+        """Texts and button labels of bot messages that were not on the page before this send
+        (minus ignored ones), and how many new message elements there are in total."""
+        bubbles = await bot_messages.evaluate_all(READ_BUBBLES_JS, SEEN_ATTRIBUTE)
+        new = [(text, labels) for seen, text, labels in bubbles if not seen]
+        kept = [(text, labels) for text, labels in new if (text or labels) and not self._ignored(text)]
+        texts = [text for text, _ in kept if text]
+        buttons = [label for _, labels in kept for label in labels]
+        return texts, buttons, len(new)
+
+    async def _read_reply(self, scope: Scope, bot_messages: Any, submitted: float) -> BotReply:
+        """Wait for new bot messages, the typing indicator to go away, and the text to settle."""
         deadline = submitted + self.timeout
-        timeout_error = AdapterError(f"The bot did not reply within {self.timeout:g} seconds.", retryable=True)
+        timeout_error = AdapterError(
+            f"The bot did not reply within {self.timeout:g} seconds.",
+            retryable=True,
+            step="reply",
+            selector=self.selectors.bot_message,
+        )
 
-        while await bot_messages.count() <= before:
+        while not (await self._new_bot_messages(bot_messages))[0]:
             if time.monotonic() > deadline:
                 raise timeout_error
             await asyncio.sleep(APPEAR_POLL_SECONDS)
@@ -236,13 +332,13 @@ class BrowserAdapter(BaseAdapter):
                 await asyncio.sleep(APPEAR_POLL_SECONDS)
 
         settle_seconds = self.target.reply_settle_ms / 1000
-        last_text, last_count, stable_since = "", -1, time.monotonic()
+        last_text, last_buttons, last_count, stable_since = "", [], -1, time.monotonic()
         while True:
-            texts = await bot_messages.all_inner_texts()
-            text = "\n".join(part.strip() for part in texts[before:] if part.strip())
+            texts, buttons, count = await self._new_bot_messages(bot_messages)
+            text = "\n".join(texts)
             now = time.monotonic()
-            if text != last_text or len(texts) != last_count:
-                last_text, last_count, stable_since = text, len(texts), now
+            if text != last_text or buttons != last_buttons or count != last_count:
+                last_text, last_buttons, last_count, stable_since = text, buttons, count, now
             elif text and now - stable_since >= settle_seconds:
                 break
             if now > deadline:
@@ -250,7 +346,24 @@ class BrowserAdapter(BaseAdapter):
                     break  # partial reply: keep what arrived rather than failing
                 raise timeout_error
             await asyncio.sleep(SETTLE_POLL_SECONDS)
-        return BotReply(text=last_text.strip(), latency_ms=latency_ms)
+        return BotReply(text=last_text.strip(), latency_ms=latency_ms, buttons=last_buttons)
+
+    # ------------------------------------------------------------ audit check debug folder
+
+    async def _save_debug(self, page: Page, error: AdapterError | None) -> None:
+        """Write the debug folder once, if `audit check` asked for one. Never hides the original error."""
+        if self.debug_dir is None or self.debug_folder is not None:
+            return
+        from chatbot_audit.connect.check_debug import save_debug_folder
+
+        self.debug_folder = await save_debug_folder(page, self.debug_dir, self.target.url, self.selectors, error)
+
+    async def save_debug(self, conversation_id: str) -> Path | None:
+        """Write the debug folder for a working conversation (`audit check --debug`)."""
+        conversation = self._conversations.get(conversation_id)
+        if conversation is not None:
+            await self._save_debug(conversation.page, None)
+        return self.debug_folder
 
     # ------------------------------------------------------------ evidence + cleanup
 

@@ -66,6 +66,16 @@ async def count(page: Page, selector: str) -> int:
     return await page.locator(selector).count()
 
 
+async def test_never_builds_a_selector_for_html_or_body(static_page: Page) -> None:
+    await static_page.evaluate("() => document.body.classList.add('page')")
+    for tag in ("html", "body"):
+        for mode in ("unique", "all_similar", "textbox"):
+            assert await build(static_page, tag, mode) is None, (tag, mode)
+    # An element with no hooks of its own does not climb up to the body's class.
+    await static_page.evaluate("() => document.body.insertAdjacentHTML('beforeend', '<p id=plain>Plain</p>')")
+    assert await build(static_page, "body > p", "all_similar") == "p"
+
+
 async def test_unique_prefers_stable_id(static_page: Page) -> None:
     assert await build(static_page, "text=Send") == "#send-button"
 

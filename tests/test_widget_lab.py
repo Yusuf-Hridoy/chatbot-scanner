@@ -128,6 +128,10 @@ class LabScriptedUI:
 
     async def _click_when_picking(self, locator: Locator) -> None:
         """Click only once the recorder has switched pick mode on, like a person reading the prompt."""
+        await self._wait_for_pick_mode()
+        await locator.click()
+
+    async def _wait_for_pick_mode(self) -> None:
         for _ in range(400):
             modes = []
             for frame in self.page.frames:
@@ -136,9 +140,8 @@ class LabScriptedUI:
                 except Exception:  # noqa: BLE001 - frame still loading
                     pass
             if any(modes):
-                break
+                return
             await asyncio.sleep(0.05)
-        await locator.click()
 
     def say(self, text: str) -> None:
         self.lines.append(text)
@@ -199,9 +202,47 @@ CONNECT_CASES: dict[str, tuple[Callable[[], LabScriptedUI], dict[str, Any]]] = {
 }
 
 
-async def record_and_check(server: DemoBotServer, name: str, folder: Path) -> dict[str, Any]:
+class WrongClicksUI(LabScriptedUI):
+    """A person who makes mistakes on the shadow-dom page: presses Enter at the launcher step while the
+    chat is still closed, then clicks the page background at the launcher and message box steps."""
+
+    def __init__(self) -> None:
+        super().__init__(_in_page(".lab-launcher"), _in_page(".lab-input"), _in_page(".msg-bot"))
+        self.launcher_prompts = 0
+
+    async def _click_background(self) -> None:
+        await self._wait_for_pick_mode()
+        await self.page.mouse.click(5, 790)  # empty page: the <html> or <body> element
+        await asyncio.sleep(0.5)
+
+    async def _background_then(self, locator: Locator) -> None:
+        await self._click_background()
+        await self._click_when_picking(locator)
+
+    def say(self, text: str) -> None:
+        if text.startswith("Click inside the message box"):
+            self.lines.append(text)
+            self.tasks.append(asyncio.ensure_future(self._background_then(self.message_box(self.page))))
+        else:
+            super().say(text)
+
+    async def wait_for_enter(self, prompt: str) -> None:
+        if prompt.startswith("Click the chat bubble"):
+            self.launcher_prompts += 1
+            self.lines.append(prompt.strip())
+            if self.launcher_prompts == 1:
+                return  # Enter, but the chat is still closed
+            await self._background_then(self.launcher(self.page))
+            await asyncio.sleep(1.0)
+            return
+        await super().wait_for_enter(prompt)
+
+
+async def record_and_check(
+    server: DemoBotServer, name: str, folder: Path, ui: LabScriptedUI | None = None
+) -> dict[str, Any]:
     """Drive `audit connect` with scripted clicks, then run `audit check` with only the recorded target."""
-    ui = CONNECT_CASES[name][0]()
+    ui = ui or CONNECT_CASES[name][0]()
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
         try:
@@ -247,6 +288,9 @@ def lab_runs(lab_server: DemoBotServer, tmp_path_factory: pytest.TempPathFactory
         )
     for name in CONNECT_CASES:
         jobs[f"connect:{name}"] = lambda name=name: record_and_check(server, name, base / "connect" / name)
+    jobs["connect:wrong-clicks"] = lambda: record_and_check(
+        server, "shadow-dom", base / "connect" / "wrong-clicks", WrongClicksUI()
+    )
     jobs["fix:welcome"] = lambda: converse(lab_adapter(server, "welcome-message"), ("Hi",))
     # The page asks for an email in a bot-like bubble, then the bot's own reply also mentions email.
     jobs["fix:newsletter"] = lambda: converse(lab_adapter(server, "system-bubble"), (NEWSLETTER_MESSAGE,))
@@ -385,6 +429,22 @@ def test_audit_connect_records_working_selectors(lab_runs, name: str) -> None:
     assert run["target"]["selectors"] == CONNECT_CASES[name][1]
     check = run["check"]
     assert check.exit_code == 0, check.output  # `audit check` with only the recorded target block
+    assert f"Reply:   {HELLO_REPLY}\n" in check.output
+
+
+def test_audit_connect_recovers_from_wrong_clicks(lab_runs) -> None:
+    run = lab_runs["connect:wrong-clicks"].get()
+    transcript = run["transcript"]
+    print("\n--- audit connect with wrong clicks ---\n" + "\n".join(transcript))
+    launcher_prompt = "Click the chat bubble that opens the chat. If the chat box is already open, press Enter here."
+    assert transcript.count(launcher_prompt) == 2  # asked again after Enter with a closed chat
+    assert "I can't see an open chat box. Please click the chat bubble." in transcript
+    assert "That click was on the page background. Please click the chat bubble." in transcript
+    assert "That is not a message box. Please click inside the box where customers type." in transcript
+    assert run["target"]["selectors"] == RECORDED
+    assert "html" not in target_yaml(run["target"]) and "body" not in target_yaml(run["target"])
+    check = run["check"]
+    assert check.exit_code == 0, check.output
     assert f"Reply:   {HELLO_REPLY}\n" in check.output
 
 

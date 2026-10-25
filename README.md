@@ -173,9 +173,12 @@ click is recorded instead of acting on the page.
    in this step, so you can accept cookies or close a promo before the recording starts.
 3. *"Click the chat bubble that opens the chat. If the chat box is already open, press Enter here."*
    Click the launcher (the tool then opens the chat for you) and press Enter in the terminal, or just
-   press Enter if the chat is already open.
+   press Enter if the chat is already open. If you press Enter but no message box can be seen, the tool
+   says *"I can't see an open chat box. Please click the chat bubble."* and asks again.
 4. *"Click inside the message box where customers type."* If the box is inside an iframe, the iframe
-   is detected automatically (turn this off with `--no-frame-auto`).
+   is detected automatically (turn this off with `--no-frame-auto`). Only a text box counts (a text
+   input, a textarea, a contenteditable box or `role="textbox"`). Any other click gets *"That is not a
+   message box. Please click inside the box where customers type."* and the tool asks again.
 5. *"If this chat has a Send button, click it now. If pressing Enter sends messages, press Enter here."*
    Click the Send button (it is recorded, not pressed) and press Enter in the terminal, or just press
    Enter. Then the tool types "Hello" and sends it the same way.
@@ -186,7 +189,10 @@ click is recorded instead of acting on the page.
 8. The `target:` block is printed and saved to `--out` (default `./target_recorded.yaml`). Paste it
    into your client config and run `audit check`.
 
-Each click step times out after 120 seconds.
+Each click step times out after 120 seconds. A click on the page background (outside every element) is
+never recorded: the tool asks you to click again. Enter presses typed before a prompt are thrown away,
+so an early Enter cannot answer the next question. If the browser has a problem (for example, the page
+does not load or you close the window), the tool prints one short line and stops with exit code 1.
 
 ## Evidence and delivery
 

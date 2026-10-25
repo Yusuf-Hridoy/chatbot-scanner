@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,6 +19,15 @@ PICK_TIMEOUT_SECONDS = 120.0
 FIRST_MESSAGE = "Hello"
 SECOND_MESSAGE = "What can you help with?"
 CLOSE_POPUPS_PROMPT = "Close any cookie banners or popups on the page, then press Enter. "
+LAUNCHER_PROMPT = "Click the chat bubble that opens the chat. If the chat box is already open, press Enter here. "
+CHAT_NOT_OPEN = "I can't see an open chat box. Please click the chat bubble."
+NOT_A_MESSAGE_BOX = "That is not a message box. Please click inside the box where customers type."
+# Said when a click lands on the page itself (<html> or <body>) instead of a chat element.
+BACKGROUND_LAUNCHER = "That click was on the page background. Please click the chat bubble."
+BACKGROUND_SEND = "That click was on the page background. Please click the Send button, or press Enter here."
+BACKGROUND_REPLY = "That click was on the page background. Please click the bot's reply."
+BACKGROUND_TYPING = "That click was on the page background. Please click the typing animation, or press Enter."
+BROWSER_CLOSED = "The browser window was closed. Run 'audit connect' again."
 SEND_BUTTON_PROMPT = "If this chat has a Send button, click it now. If pressing Enter sends messages, press Enter here. "
 
 
@@ -31,6 +41,31 @@ class RecorderUI(Protocol):
     async def confirm(self, question: str) -> bool: ...
 
 
+def discard_typed_keys(stream: Any = None) -> None:
+    """Throw away keys typed before a prompt (an Enter pressed during a click step must not answer it).
+
+    Does nothing if stdin is not a terminal.
+    """
+    stream = sys.stdin if stream is None else stream
+    try:
+        if stream is None or not stream.isatty():
+            return
+    except (AttributeError, ValueError):
+        return
+    if sys.platform == "win32":
+        import msvcrt
+
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+    else:
+        import termios
+
+        try:
+            termios.tcflush(stream, termios.TCIFLUSH)
+        except (termios.error, OSError, ValueError):
+            pass
+
+
 class TerminalUI:
     """Prompts in the terminal. input() runs in a thread so browser clicks are captured meanwhile."""
 
@@ -38,18 +73,21 @@ class TerminalUI:
         print(text, flush=True)
 
     async def wait_for_enter(self, prompt: str) -> None:
+        discard_typed_keys()
         await asyncio.to_thread(input, prompt)
 
     async def confirm(self, question: str) -> bool:
+        discard_typed_keys()
         answer = await asyncio.to_thread(input, f"{question} [Y/n] ")
         return answer.strip().lower() not in ("n", "no")
 
 
 @dataclass
 class Pick:
-    selector: str
+    selector: str | None   # None when the click was on the page background (<html> or <body>)
     text: str
     frame: Frame
+    textbox: bool = False  # the click was inside a box a customer can type into
 
 
 class SelectorRecorder:
@@ -78,8 +116,15 @@ class SelectorRecorder:
 
         def on_pick(source: dict[str, Any], payload: dict[str, Any]) -> None:
             recorder = recorder_holder.get("recorder")
-            if recorder is not None and payload.get("selector"):
-                recorder.picks.put_nowait(Pick(payload["selector"], payload.get("text") or "", source["frame"]))
+            if recorder is not None:
+                recorder.picks.put_nowait(
+                    Pick(
+                        payload.get("selector") or None,
+                        payload.get("text") or "",
+                        source["frame"],
+                        bool(payload.get("textbox")),
+                    )
+                )
 
         await context.expose_binding("__auditPick", on_pick)
         await context.add_init_script(path=str(SELECTOR_BUILDER_JS))
@@ -101,22 +146,31 @@ class SelectorRecorder:
         while not self.picks.empty():
             self.picks.get_nowait()
 
-    async def _pick(self, mode: str) -> Pick:
+    async def _next_pick(self, retry: str, need_textbox: bool = False) -> Pick:
+        """The next usable click. Clicks on the page background (or, for the message box, on anything
+        that is not a text box) are refused with `retry`, and the person is asked again."""
+        while True:
+            pick = await self.picks.get()
+            if pick.selector and (pick.textbox or not need_textbox):
+                return pick
+            self.ui.say(retry)
+
+    async def _pick(self, mode: str, retry: str, need_textbox: bool = False) -> Pick:
         """Wait for one click in pick mode; clicks are captured instead of acting on the page."""
         self._drain_picks()
         await self._set_pick_mode(mode)
         try:
-            return await asyncio.wait_for(self.picks.get(), timeout=self.pick_timeout)
+            return await asyncio.wait_for(self._next_pick(retry, need_textbox), timeout=self.pick_timeout)
         except asyncio.TimeoutError as exc:
             raise ConfigError(f"No click received within {self.pick_timeout:g} seconds. Run 'audit connect' again.") from exc
         finally:
             await self._set_pick_mode(None)
 
-    async def _pick_or_enter(self, mode: str, prompt: str) -> Pick | None:
+    async def _pick_or_enter(self, mode: str, prompt: str, retry: str) -> Pick | None:
         """Wait for a click, or for Enter in the terminal (returns None)."""
         self._drain_picks()
         await self._set_pick_mode(mode)
-        pick_task = asyncio.ensure_future(self.picks.get())
+        pick_task = asyncio.ensure_future(self._next_pick(retry))
         enter_task = asyncio.ensure_future(self.ui.wait_for_enter(prompt))
         try:
             done, _ = await asyncio.wait(
@@ -142,6 +196,20 @@ class SelectorRecorder:
         element = await frame.frame_element()
         return await element.evaluate("el => window.__auditBuildSelector(el, 'unique')")
 
+    async def _chat_box_visible(self) -> bool:
+        """True if a message box is visible on the page, in an open shadow root or in a visible iframe."""
+        for frame in self.page.frames:
+            try:
+                if frame != self.page.main_frame:
+                    element = await frame.frame_element()
+                    if not await element.is_visible():
+                        continue
+                if await frame.evaluate("() => !!(window.__auditHasVisibleTextbox && window.__auditHasVisibleTextbox())"):
+                    return True
+            except PlaywrightError:
+                continue  # frame still loading or gone
+        return False
+
     def _scope(self, frame_selector: str | None) -> Page | FrameLocator:
         return self.page.frame_locator(frame_selector) if frame_selector else self.page
 
@@ -150,16 +218,20 @@ class SelectorRecorder:
     async def record(self, url: str) -> dict[str, Any]:
         """Run the guided steps and return the `target:` block as a dict."""
         self.ui.say("The page is loading…")
-        await self.page.goto(url)
+        try:
+            await self.page.goto(url)
+        except PlaywrightError as exc:
+            raise ConfigError(f"Could not open {url}. Check the address and that the site is running.") from exc
 
         # Pick mode is off here, so clicks act on the page normally.
         await self._set_pick_mode(None)
         await self.ui.wait_for_enter(CLOSE_POPUPS_PROMPT)
 
-        launcher = await self._pick_or_enter(
-            "unique",
-            "Click the chat bubble that opens the chat. If the chat box is already open, press Enter here. ",
-        )
+        while True:
+            launcher = await self._pick_or_enter("unique", LAUNCHER_PROMPT, BACKGROUND_LAUNCHER)
+            if launcher is not None or await self._chat_box_visible():
+                break
+            self.ui.say(CHAT_NOT_OPEN)  # Enter was pressed, but the chat is still closed
         open_button = None
         if launcher is not None:
             open_button = launcher.selector
@@ -168,14 +240,14 @@ class SelectorRecorder:
             await frame_of_launcher.locator(open_button).first.click()  # actually open the chat now
 
         self.ui.say("Click inside the message box where customers type.")
-        picked_input = await self._pick("unique")
+        picked_input = await self._pick("textbox", NOT_A_MESSAGE_BOX, need_textbox=True)
         frame = await self._frame_selector(picked_input.frame)
         self.ui.say(f"  Message box: {picked_input.selector}" + (f" (inside iframe {frame})" if frame else ""))
         scope = self._scope(frame)
         input_locator = scope.locator(picked_input.selector).first
 
         # Pick mode catches this click, so it does not send anything yet.
-        picked_send = await self._pick_or_enter("unique", SEND_BUTTON_PROMPT)
+        picked_send = await self._pick_or_enter("unique", SEND_BUTTON_PROMPT, BACKGROUND_SEND)
         send_button = picked_send.selector if picked_send else None
         if send_button:
             self.ui.say(f"  Send button: {send_button}")
@@ -190,7 +262,7 @@ class SelectorRecorder:
             "or press Enter to skip."
         )
         await self._send_message(scope, input_locator, send_button, SECOND_MESSAGE)
-        typing = await self._pick_or_enter("all_similar", "Press Enter to skip the typing indicator. ")
+        typing = await self._pick_or_enter("all_similar", "Press Enter to skip the typing indicator. ", BACKGROUND_TYPING)
         typing_indicator = typing.selector if typing else None
         if typing_indicator:
             self.ui.say(f"  Typing indicator: {typing_indicator}")
@@ -223,7 +295,7 @@ class SelectorRecorder:
     async def _pick_bot_message(self, scope: Page | FrameLocator) -> str:
         while True:
             self.ui.say("Click on the bot's reply.")
-            pick = await self._pick("all_similar")
+            pick = await self._pick("all_similar", BACKGROUND_REPLY)
             matches = scope.locator(pick.selector)
             texts = [text.strip() for text in await matches.all_inner_texts()]
             if not texts or not texts[-1]:
@@ -236,6 +308,15 @@ class SelectorRecorder:
             self.ui.say(f"  Last reply: {texts[-1]}")
             if await self.ui.confirm("Is this the bot's reply?"):
                 return pick.selector
+
+
+def browser_error_message(exc: Exception) -> str:
+    """One short line for a Playwright error (no call log, no traceback)."""
+    text = str(exc).strip()
+    if "has been closed" in text or "Target closed" in text:
+        return BROWSER_CLOSED
+    first = text.splitlines()[0][:150] if text else exc.__class__.__name__
+    return f"The browser stopped working ({first}). Run 'audit connect' again."
 
 
 def target_yaml(target: dict[str, Any]) -> str:
@@ -255,8 +336,13 @@ async def run_connect(url: str, out_path: Path, frame_auto: bool = True, headles
             context = await browser.new_context(viewport={"width": 1280, "height": 800})
             recorder = await SelectorRecorder.attach(context, ui, frame_auto=frame_auto)
             target = await recorder.record(url)
+        except PlaywrightError as exc:
+            raise ConfigError(browser_error_message(exc)) from exc
         finally:
-            await browser.close()
+            try:
+                await browser.close()
+            except PlaywrightError:
+                pass  # already closed by the person
     text = target_yaml(target)
     out_path = Path(out_path)
     out_path.write_text(text, encoding="utf-8")

@@ -7,6 +7,44 @@
   var TEST_ATTRIBUTES = ["data-testid", "data-test", "data-qa"];
   var GENERATED_PREFIX = /^(css|sc|jsx|emotion|svelte|styled)-/i;
   var PER_ITEM_ATTRIBUTE = /(^|-)(id|index|key|time|timestamp|uuid|ts)$/i;
+  var NOT_TEXT_INPUTS = /^(hidden|password|checkbox|radio|submit|button|reset|file|image|range|color)$/i;
+  var TEXTBOX_CANDIDATES = "input, textarea, [contenteditable], [role='textbox']";
+
+  // <html> and <body> are the page itself, never a chat element.
+  function isPageRoot(element) {
+    var tag = element.tagName.toLowerCase();
+    return tag === "html" || tag === "body";
+  }
+
+  // A box a customer can type into: a text input, a textarea, a contenteditable element or role="textbox".
+  function isTextbox(element) {
+    if (!element || element.nodeType !== 1 || isPageRoot(element)) return false;
+    var tag = element.tagName.toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag === "input") return !NOT_TEXT_INPUTS.test(element.getAttribute("type") || "text");
+    if (element.isContentEditable) return true;
+    return (element.getAttribute("role") || "").toLowerCase() === "textbox";
+  }
+
+  // The text box around a click: a click on a line inside a rich text box gives the whole box.
+  function textboxOf(element) {
+    if (element.isContentEditable) {
+      var node = element;
+      while (node.parentElement && node.parentElement.isContentEditable && !isPageRoot(node.parentElement)) {
+        node = node.parentElement;
+      }
+      return node;
+    }
+    if (isTextbox(element)) return element;
+    var box = element.closest ? element.closest("[role='textbox']") : null;
+    return box || element;
+  }
+
+  function isVisible(element) {
+    var box = element.getBoundingClientRect();
+    var style = getComputedStyle(element);
+    return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
 
   function cssString(value) {
     return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\a ") + '"';
@@ -142,7 +180,7 @@
 
   function similarSelector(element) {
     var node = element;
-    for (var depth = 0; node && node.nodeType === 1 && depth <= 3; depth++) {
+    for (var depth = 0; node && node.nodeType === 1 && !isPageRoot(node) && depth <= 3; depth++) {
       var hooks = similarHooks(node);
       if (hooks) return hooks;
       node = node.parentElement;
@@ -150,9 +188,25 @@
     return element.tagName.toLowerCase();
   }
 
+  // mode: "unique" (one element), "all_similar" (every element like it) or "textbox" (the text box
+  // around the element, as a unique selector). Never a selector for <html> or <body>.
   window.__auditBuildSelector = function (element, mode) {
     if (!element || element.nodeType !== 1) return null;
+    if (mode === "textbox") element = textboxOf(element);
+    if (isPageRoot(element)) return null;
     return mode === "all_similar" ? similarSelector(element) : uniqueSelector(element);
+  };
+
+  window.__auditIsTextbox = isTextbox;
+
+  // True if this frame shows a box a customer can type into (search boxes do not count).
+  window.__auditHasVisibleTextbox = function () {
+    return searchRoots().some(function (root) {
+      return Array.prototype.some.call(root.querySelectorAll(TEXTBOX_CANDIDATES), function (element) {
+        var type = (element.getAttribute("type") || "").toLowerCase();
+        return isTextbox(element) && type !== "search" && isVisible(element);
+      });
+    });
   };
 
   // Click-to-pick: while window.__auditPickMode is set, clicks are captured instead of acting.
@@ -169,11 +223,14 @@
       var path = event.composedPath ? event.composedPath() : [];
       var target = path.length ? path[0] : event.target;
       if (target && target.nodeType !== 1) target = target.parentElement;
+      if (!target) return;
       if (typeof window.__auditPick === "function") {
+        var box = mode === "textbox" ? textboxOf(target) : target;
         window.__auditPick({
-          selector: window.__auditBuildSelector(target, mode),
-          text: (target.innerText || target.value || "").trim().slice(0, 500),
+          selector: window.__auditBuildSelector(target, mode),  // null for the page background
+          text: (target.innerText || "").trim().slice(0, 500),   // never a typed value
           mode: mode,
+          textbox: isTextbox(box),
         });
       }
     },

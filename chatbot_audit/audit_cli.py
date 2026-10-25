@@ -231,12 +231,16 @@ def connect(
     ] = True,
 ) -> None:
     """Record chat widget selectors by clicking on the page (opens a browser window)."""
-    from chatbot_audit.connect.selector_recorder import run_connect
+    from playwright.async_api import Error as PlaywrightError
+
+    from chatbot_audit.connect import selector_recorder
 
     try:
-        asyncio.run(run_connect(url, out, frame_auto=frame_auto))
+        asyncio.run(selector_recorder.run_connect(url, out, frame_auto=frame_auto))
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
+    except PlaywrightError as exc:
+        raise _fail(selector_recorder.browser_error_message(exc)) from exc
     except KeyboardInterrupt as exc:
         raise _fail("Cancelled.") from exc
 

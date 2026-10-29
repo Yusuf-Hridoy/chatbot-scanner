@@ -18,15 +18,22 @@ class AdapterError(Exception):
     `retryable` is True only for timeouts, connection errors and HTTP 5xx responses.
     Browser errors also name the `step` that failed ("page load", "launcher", "input" or "reply")
     and the `selector` used for it, for the `audit check` debug folder.
+    `no_reply` is True when the message was sent but no reply was seen in time.
     """
 
     def __init__(
-        self, message: str, retryable: bool = False, step: str | None = None, selector: str | None = None
+        self,
+        message: str,
+        retryable: bool = False,
+        step: str | None = None,
+        selector: str | None = None,
+        no_reply: bool = False,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.step = step
         self.selector = selector
+        self.no_reply = no_reply
 
 
 class BotReply(BaseModel):

@@ -77,6 +77,7 @@ class OpenAITargetConfig(BaseModel):
 
 WIDGET_SELECTOR_KEYS = (
     "frame", "open_button", "input", "send_button", "bot_message", "typing_indicator", "evidence_area",
+    "message_text",
 )
 
 
@@ -88,6 +89,7 @@ class WidgetSelectors(BaseModel):
     bot_message: str                    # matches EVERY bot message element in the conversation
     typing_indicator: str | None = None # element visible while the bot is "typing"
     evidence_area: str | None = None    # element to screenshot as evidence; None = the iframe or chat box
+    message_text: str | None = None     # plain CSS for the text inside each bot message (leaves out a sender name)
 
 
 # A bot bubble is skipped when its WHOLE text (trimmed) matches one of these: "…" placeholders and
@@ -106,6 +108,7 @@ class BrowserTargetConfig(BaseModel):
     preset: str = "generic"             # name of a file in widget_presets/ (without .yaml)
     selectors: dict[str, str | None] = {}   # overrides merged on top of the preset's selectors
     dismiss_selectors: list[str] = []   # clicked if present after page load (cookie banners etc.)
+    chat_dismiss_selectors: list[str] = []  # clicked if visible before every send (pop-ups inside the chat)
     reply_settle_ms: int = Field(default=1500, ge=200)   # text must stay unchanged this long
     page_load_timeout_seconds: float = Field(default=30, gt=0)
     headless: bool = True

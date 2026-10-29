@@ -53,6 +53,12 @@ def resolve_dismiss_selectors(target: BrowserTargetConfig) -> list[str]:
     return list(dict.fromkeys([*preset_dismiss, *target.dismiss_selectors]))
 
 
+def resolve_chat_dismiss_selectors(target: BrowserTargetConfig) -> list[str]:
+    """The preset's chat pop-up selectors followed by the config's own."""
+    preset_dismiss = load_preset(target.preset).get("chat_dismiss_selectors") or []
+    return list(dict.fromkeys([*preset_dismiss, *target.chat_dismiss_selectors]))
+
+
 def is_verified(name: str) -> bool:
     """Whether a preset has been tested against a real widget."""
     return bool(load_preset(name).get("verified", False))

@@ -238,6 +238,8 @@ async def run_attacks_async(
 
     (run_dir / EVIDENCE_DIR).mkdir(exist_ok=True)
     adapter = create_adapter(config)
+    if isinstance(config.target, BrowserTargetConfig):
+        adapter.echo = echo  # the browser adapter prints warnings such as the message_text fallback
     await execute_attacks(
         pending,
         adapter,

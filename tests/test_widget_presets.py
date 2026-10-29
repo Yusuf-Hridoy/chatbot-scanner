@@ -10,6 +10,7 @@ from chatbot_audit.adapters.widget_preset_loader import (
     is_verified,
     list_presets,
     load_preset,
+    resolve_chat_dismiss_selectors,
     resolve_dismiss_selectors,
     resolve_selectors,
     unverified_preset_warning,
@@ -82,6 +83,26 @@ def test_verified_flag_and_warning() -> None:
 def test_dismiss_selectors_combine_preset_and_config() -> None:
     selectors = resolve_dismiss_selectors(target(dismiss_selectors=["#close-promo"]))
     assert selectors == [load_preset("generic")["dismiss_selectors"][0], "#close-promo"]
+
+
+def test_chat_dismiss_selectors_combine_preset_and_config() -> None:
+    assert resolve_chat_dismiss_selectors(target()) == []
+    selectors = resolve_chat_dismiss_selectors(target(preset="crisp", chat_dismiss_selectors=["#close-survey"]))
+    assert selectors == ["button:has-text('Skip')", "#close-survey"]
+
+
+def test_message_text_is_an_optional_selector() -> None:
+    assert resolve_selectors(target()).message_text is None
+    assert resolve_selectors(target(selectors={"message_text": ".text"})).message_text == ".text"
+
+
+def test_crisp_preset_uses_the_selectors_that_worked_on_a_real_widget() -> None:
+    preset = load_preset("crisp")
+    assert preset["selectors"]["input"] == "textarea[name='message']"
+    assert preset["selectors"]["bot_message"] == "[class*='--operator'][class*='--text']"
+    assert preset["chat_dismiss_selectors"] == ["button:has-text('Skip')"]
+    assert preset["verified"] is False
+    assert "sender-name handling still needs one real check" in preset["description"]
 
 
 def test_browser_example_config_loads() -> None:

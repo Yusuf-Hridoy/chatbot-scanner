@@ -58,6 +58,8 @@ LAB_PAGES = {
     "send-button-only": "Enter does nothing. Only the Send button sends.",
     "quick-replies": "Bot replies have quick reply buttons inside the bubble.",
     "slow-reply": "The first reply takes 15 seconds.",
+    "sender-name": "Each bot reply shows the agent's name above the text, inside the same message element.",
+    "email-popup": "After the first reply, an email form with Set my email and Skip covers the message box.",
 }
 LAB_PAGE_RE = re.compile(r"^[a-z-]+$")
 LAB_ASSET_RE = re.compile(r"^[a-z_]+\.(js|css)$")

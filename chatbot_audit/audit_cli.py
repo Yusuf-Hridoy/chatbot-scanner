@@ -140,6 +140,7 @@ def check(
         adapter = create_adapter(client_config)
         if is_browser:
             adapter.debug_dir = config_dir / DEBUG_FOLDER  # a failure saves the debug folder here
+            adapter.echo = typer.echo
         try:
             conversation_id = await adapter.start_conversation()
             try:
@@ -158,7 +159,8 @@ def check(
     except ConfigError as exc:
         raise _fail(str(exc)) from exc
     except AdapterError as exc:
-        typer.secho(f"Error: The chatbot is not reachable. {exc}", fg=typer.colors.RED, err=True)
+        message = str(exc) if exc.no_reply else f"The chatbot is not reachable. {exc}"
+        typer.secho(f"Error: {message}", fg=typer.colors.RED, err=True)
         _print_debug_folder(debug_folder[0])
         raise typer.Exit(2) from exc
     typer.secho(f"Connected to {client_config.display_name} ({client_config.target.type}).", fg=typer.colors.GREEN)

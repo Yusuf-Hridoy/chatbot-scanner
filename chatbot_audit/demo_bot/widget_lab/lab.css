@@ -33,3 +33,14 @@ body.lab-frame-page .lab-panel { position: static; width: auto; height: 100vh; b
 .lab-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e3e7ee; }
 .lab-input { flex: 1; resize: none; min-height: 40px; padding: 8px 10px; border: 1px solid #cfd6e0; border-radius: 10px; font: inherit; font-size: 14px; background: #fff; }
 .lab-send { padding: 0 14px; border: 0; border-radius: 10px; background: #2b2622; color: #fff; cursor: pointer; }
+
+/* Sender name inside a bot message (sender-name page) */
+.msg-sender { display: block; margin-bottom: 2px; font-size: 12px; font-weight: 600; color: #3b5a8a; }
+
+/* Email form that covers the message box (email-popup page) */
+.lab-email-popup { padding: 12px; border-top: 1px solid #e3e7ee; background: #fbf8f4; font-size: 14px; }
+.lab-email-popup p { margin: 0 0 8px; }
+.lab-email-popup input { width: 100%; padding: 8px 10px; border: 1px solid #cfd6e0; border-radius: 10px; font: inherit; }
+.lab-email-actions { display: flex; gap: 8px; margin-top: 8px; }
+.lab-email-actions button { padding: 7px 14px; border: 0; border-radius: 8px; background: #3b5a8a; color: #fff; cursor: pointer; }
+.lab-email-actions button + button { background: #e8edf5; color: #2b2622; }

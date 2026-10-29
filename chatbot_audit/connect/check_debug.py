@@ -25,6 +25,8 @@ DEBUG_FILES = ("page.png", "frames.json", "candidates.json", "summary.txt")
 REVIEWER_NOTE = "Send this folder to your reviewer to fix the selectors."
 CANDIDATE_LIMIT = 200
 TOP_CANDIDATES = 3
+CHILD_LIMIT = 10
+MESSAGE_TEXT_HINT = 'To leave out a sender name, set target.selectors.message_text to one of the selectors under "inside".'
 SCREENSHOT_TIMEOUT_MS = 10_000
 
 # step -> (what the step does, candidate kind, config key under target.selectors)
@@ -44,9 +46,10 @@ RANK_WORDS = re.compile(r"chat|message|launcher|widget|support|help|bubble|opera
 # Wrapped in a function so it runs even on pages whose Content Security Policy blocks inline scripts.
 _BUILDER_FUNCTION = "() => {\n" + SELECTOR_BUILDER_JS.read_text(encoding="utf-8") + "\n}"
 
-# Likely chat elements in this frame's document and every open shadow root in it.
+# Likely chat elements in this frame's document and every open shadow root in it. Bot message candidates also
+# list the elements inside them, to help pick target.selectors.message_text.
 # Inputs never include their value or text: that could be something a person typed.
-_CANDIDATES_JS = r"""(limit) => {
+_CANDIDATES_JS = r"""([limit, childLimit]) => {
   const CLICK_WORDS = /chat|message|launcher|widget|support|help/i;
   const MESSAGE_WORDS = /message|bubble|operator/i;
   const NOT_TEXT_INPUTS = /^(hidden|password|checkbox|radio|submit|button|reset|file|image|range|color)$/i;
@@ -84,6 +87,13 @@ _CANDIDATES_JS = r"""(limit) => {
     if (MESSAGE_WORDS.test(hooks)) return "message";
     return null;
   };
+  const isTyped = (el) => el.matches("input, textarea, select") || el.isContentEditable;
+  const childrenOf = (el) => Array.from(el.querySelectorAll("*")).slice(0, childLimit).map((child) => ({
+    tag: child.tagName.toLowerCase(),
+    class: clean(child.getAttribute("class")).slice(0, 120),
+    selector: window.__auditBuildSelector(child, "inner"),
+    text: isTyped(child) ? "" : clean(child.innerText).slice(0, 60),
+  }));
   const found = [];
   for (const root of roots) {
     for (const el of root.querySelectorAll("*")) {
@@ -91,7 +101,7 @@ _CANDIDATES_JS = r"""(limit) => {
       const tag = el.tagName.toLowerCase();
       const kind = kindOf(el, tag);
       if (!kind) continue;
-      found.push({
+      const item = {
         kind: kind,
         tag: tag,
         selector: window.__auditBuildSelector(el, kind === "message" ? "all_similar" : "unique"),
@@ -99,7 +109,9 @@ _CANDIDATES_JS = r"""(limit) => {
         visible: visible(el),
         in_shadow_dom: el.getRootNode() !== document,
         attributes: attributes(el),
-      });
+      };
+      if (kind === "message") item.children = childrenOf(el);
+      found.push(item);
     }
   }
   return found;
@@ -129,7 +141,7 @@ async def save_debug_folder(
         frames.append({"url": frame.url, "name": frame.name or None, "iframe_selector": await _iframe_selector(frame)})
         try:
             await frame.evaluate(_BUILDER_FUNCTION)
-            found = await frame.evaluate(_CANDIDATES_JS, CANDIDATE_LIMIT)
+            found = await frame.evaluate(_CANDIDATES_JS, [CANDIDATE_LIMIT, CHILD_LIMIT])
         except PlaywrightError as exc:
             notes.append(f"Could not look inside the frame {frame.url}: {_first_line(exc)}")
             continue
@@ -187,6 +199,12 @@ def _describe(number: int, item: dict[str, Any]) -> list[str]:
     if item["attributes"]:
         attributes = ", ".join(f'{name}="{value}"' for name, value in item["attributes"].items())
         lines.append(f"     attributes: {attributes}")
+    if item.get("children"):
+        lines.append("     inside:")
+        for child in item["children"]:
+            details = child["tag"] + (f', class "{child["class"]}"' if child["class"] else "")
+            text = f': "{child["text"]}"' if child["text"] else ""
+            lines.append(f"       - {child['selector']} ({details}){text}")
     return lines
 
 
@@ -201,6 +219,8 @@ def _candidate_block(candidates: list[dict[str, Any]], kind: str) -> list[str]:
         lines = [f"The {len(ranked)} most likely {many}:"]
     for number, item in enumerate(ranked, start=1):
         lines += _describe(number, item)
+    if any(item.get("children") for item in ranked):
+        lines.append(MESSAGE_TEXT_HINT)
     return lines
 
 

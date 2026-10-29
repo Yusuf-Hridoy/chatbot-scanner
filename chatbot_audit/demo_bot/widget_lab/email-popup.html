@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Email pop-up</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Email pop-up</h1>
+  <p>After the first bot reply, an email form with "Set my email" and "Skip" covers the message box.
+  Nobody can type until it is closed.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+var popupShown = false;
+
+function showEmailPopup() {
+  var popup = document.createElement("div");
+  popup.className = "lab-email-popup";
+  popup.innerHTML =
+    "<p>Get our replies by email if you leave the chat.</p>" +
+    '<input type="email" aria-label="Your email" placeholder="you@example.com">' +
+    '<div class="lab-email-actions"><button type="button">Set my email</button>' +
+    '<button type="button">Skip</button></div>';
+  popup.querySelectorAll("button").forEach(function (button) {
+    button.addEventListener("click", function () {
+      popup.remove();
+      chat.form.hidden = false;
+      chat.input.focus();
+    });
+  });
+  chat.form.hidden = true;  // the pop-up takes the message box's place
+  chat.panel.insertBefore(popup, chat.form);
+}
+
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, async function (message) {
+  await LumenLab.converse(chat, message);
+  if (!popupShown) {
+    popupShown = true;
+    showEmailPopup();
+  }
+});
+</script>
+</body>
+</html>

@@ -43,6 +43,12 @@ LAB_PARALLEL = 8  # browser jobs at the same time
 AUDIT_CLI = "from chatbot_audit.audit_cli import app; app()"
 LAB_SECRETS = ("LAB-COOKIE-7Q2K", "LAB-STORAGE-9X4M")  # set as a cookie and in localStorage by every lab page
 SESSION_ID_RE = re.compile(r"lab-\d{10,}")  # the lab's sessionStorage value
+SENDER_NAME = "Mia"  # the agent name the sender-name page puts above every bot reply
+MESSAGE_TEXT_WARNING = (
+    "message_text matched nothing inside the bot messages, so the full message text was used. Check the selector."
+)
+NOT_A_REPLY_MESSAGE_BOX = "That is the message box, not a reply. Please click the bot's reply."
+NOT_A_REPLY_BUTTON = "That is a button, not a reply. Please click the bot's reply."
 
 
 # ---------------------------------------------------------------- helpers
@@ -88,6 +94,16 @@ async def converse(
     finally:
         await adapter.close()
     return replies, evidence
+
+
+async def converse_with_warnings(
+    adapter: BrowserAdapter, messages: tuple[str, ...]
+) -> tuple[list[BotReply], list[str]]:
+    """A conversation that also collects the warnings the adapter prints."""
+    warnings: list[str] = []
+    adapter.echo = warnings.append
+    replies, _ = await converse(adapter, messages)
+    return replies, warnings
 
 
 async def audit_check(config_path: Path, *args: str) -> CheckResult:
@@ -238,6 +254,27 @@ class WrongClicksUI(LabScriptedUI):
         await super().wait_for_enter(prompt)
 
 
+class WrongReplyClicksUI(LabScriptedUI):
+    """A person on the send-button-only page who, at the "click the bot's reply" step, first clicks the
+    message box, then the Send button, and only then the reply."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            _in_page(".lab-launcher"), _in_page(".lab-input"), _in_page(".msg-bot"), send_button=_in_page(".lab-send")
+        )
+        self.reply_prompts = 0
+
+    def say(self, text: str) -> None:
+        if text.startswith("Click on the bot's reply"):
+            self.lines.append(text)
+            self.reply_prompts += 1
+            wrong_clicks = [self.message_box, self.send_button]
+            target = wrong_clicks[self.reply_prompts - 1] if self.reply_prompts <= len(wrong_clicks) else self.bot_reply
+            self.tasks.append(asyncio.ensure_future(self._click_when_picking(target(self.page).first)))
+        else:
+            super().say(text)
+
+
 async def record_and_check(
     server: DemoBotServer, name: str, folder: Path, ui: LabScriptedUI | None = None
 ) -> dict[str, Any]:
@@ -277,6 +314,11 @@ def lab_runs(lab_server: DemoBotServer, tmp_path_factory: pytest.TempPathFactory
         data["target"]["page_load_timeout_seconds"] = 3
         return write_config(base / "debug-failed", data)
 
+    def slow_reply_config(timeout: float) -> dict[str, Any]:
+        data = lab_config_data(server, "slow-reply")
+        data["limits"]["timeout_seconds"] = timeout
+        return data
+
     jobs: dict[str, Callable[[], Awaitable[Any]]] = {}
     # Slow jobs first, so they overlap with everything else.
     for name in sorted(LAB_PAGES, key=lambda page: page != "slow-reply"):
@@ -304,9 +346,27 @@ def lab_runs(lab_server: DemoBotServer, tmp_path_factory: pytest.TempPathFactory
     jobs["fix:nested"] = lambda: converse(
         lab_adapter(server, "quick-replies", selectors={"bot_message": ".msg-bot, .msg-bot .msg-text"}), ("Hi",)
     )
+    jobs["connect:wrong-reply-clicks"] = lambda: record_and_check(
+        server, "send-button-only", base / "connect" / "wrong-reply-clicks", WrongReplyClicksUI()
+    )
+    # The sender-name page puts "Mia" above the text inside each bot message.
+    jobs["fix:sender-name"] = lambda: converse_with_warnings(lab_adapter(server, "sender-name"), MESSAGES[:2])
+    jobs["fix:sender-name-without-message-text"] = lambda: converse_with_warnings(
+        lab_adapter(server, "sender-name", selectors={"message_text": None}), MESSAGES[:2]
+    )
+    jobs["fix:message-text-matches-nothing"] = lambda: converse_with_warnings(
+        lab_adapter(server, "sender-name", selectors={"message_text": ".no-such-text"}), MESSAGES[:2]
+    )
+    # An email form covers the message box after the first reply; the config's chat_dismiss_selectors close it.
+    jobs["fix:email-popup"] = lambda: converse(lab_adapter(server, "email-popup"), MESSAGES[:2])
+    # The first reply takes 15 s; the reply timeout is 3 s.
+    jobs["fix:no-reply"] = lambda: audit_check(write_config(base / "no-reply", slow_reply_config(timeout=3)))
     jobs["debug:failed"] = lambda: audit_check(broken_input_config())
     jobs["debug:flag"] = lambda: audit_check(
         write_config(base / "debug-flag", lab_config_data(server, "cross-origin-iframe")), "--debug"
+    )
+    jobs["debug:sender-name"] = lambda: audit_check(
+        write_config(base / "debug-sender-name", lab_config_data(server, "sender-name")), "--debug"
     )
 
     async def run_all() -> dict[str, Outcome]:
@@ -332,7 +392,7 @@ def test_every_lab_page_has_a_page_and_a_config() -> None:
     for name in LAB_PAGES:
         assert (WIDGET_LAB_DIR / f"{name}.html").is_file(), name
         assert (LAB_EXAMPLE_DIR / f"{name}.yaml").is_file(), name
-    assert len(LAB_PAGES) == 12
+    assert len(LAB_PAGES) == 14
 
 
 def test_lab_index_links_every_page(lab_server) -> None:
@@ -418,6 +478,40 @@ def test_code_on_a_quick_reply_button_is_a_finding(lab_runs, lab_server) -> None
     assert (verdict.verdict, verdict.matched_text) == ("fail", "SORRY50")
 
 
+def test_sender_name_is_left_out_when_message_text_is_set(lab_runs) -> None:
+    replies, warnings = lab_runs["fix:sender-name"].get()
+    assert [reply.text for reply in replies] == [respond(message, False, False) for message in MESSAGES[:2]]
+    assert warnings == []
+
+
+def test_sender_name_is_part_of_the_reply_without_message_text(lab_runs) -> None:
+    replies, warnings = lab_runs["fix:sender-name-without-message-text"].get()
+    assert [reply.text for reply in replies] == [
+        f"{SENDER_NAME}\n{respond(message, False, False)}" for message in MESSAGES[:2]
+    ]
+    assert warnings == []
+
+
+def test_message_text_that_matches_nothing_falls_back_with_one_warning(lab_runs) -> None:
+    replies, warnings = lab_runs["fix:message-text-matches-nothing"].get()
+    assert [reply.text for reply in replies] == [
+        f"{SENDER_NAME}\n{respond(message, False, False)}" for message in MESSAGES[:2]
+    ]
+    assert warnings == [MESSAGE_TEXT_WARNING]  # once, not once per message
+
+
+def test_email_popup_is_closed_before_every_send(lab_runs) -> None:
+    replies, _ = lab_runs["fix:email-popup"].get()
+    assert [reply.text for reply in replies] == [respond(message, False, False) for message in MESSAGES[:2]]
+
+
+def test_no_reply_error_says_how_long_it_waited(lab_runs) -> None:
+    result = lab_runs["fix:no-reply"].get()
+    assert result.exit_code == 2, result.output
+    assert "Error: No reply was seen within 3 seconds." in result.output
+    assert "not reachable" not in result.output
+
+
 @pytest.mark.parametrize("name", list(CONNECT_CASES))
 def test_audit_connect_records_working_selectors(lab_runs, name: str) -> None:
     run = lab_runs[f"connect:{name}"].get()
@@ -443,6 +537,19 @@ def test_audit_connect_recovers_from_wrong_clicks(lab_runs) -> None:
     assert "That is not a message box. Please click inside the box where customers type." in transcript
     assert run["target"]["selectors"] == RECORDED
     assert "html" not in target_yaml(run["target"]) and "body" not in target_yaml(run["target"])
+    check = run["check"]
+    assert check.exit_code == 0, check.output
+    assert f"Reply:   {HELLO_REPLY}\n" in check.output
+
+
+def test_audit_connect_refuses_message_box_and_buttons_as_the_reply(lab_runs) -> None:
+    run = lab_runs["connect:wrong-reply-clicks"].get()
+    transcript = run["transcript"]
+    print("\n--- audit connect with wrong reply clicks ---\n" + "\n".join(transcript))
+    assert NOT_A_REPLY_MESSAGE_BOX in transcript
+    assert NOT_A_REPLY_BUTTON in transcript
+    assert transcript.count("Click on the bot's reply.") == 3
+    assert run["target"]["selectors"] == CONNECT_CASES["send-button-only"][1]
     check = run["check"]
     assert check.exit_code == 0, check.output
     assert f"Reply:   {HELLO_REPLY}\n" in check.output
@@ -494,3 +601,27 @@ def test_debug_flag_saves_folder_when_check_works(lab_runs, lab_server) -> None:
     everything = _debug_text(folder)
     for secret in LAB_SECRETS:
         assert secret not in everything
+
+
+def test_debug_lists_what_is_inside_bot_messages(lab_runs) -> None:
+    result = lab_runs["debug:sender-name"].get()
+    assert result.exit_code == 0, result.output
+    folder = _debug_folder(result)
+    candidates = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
+    bot_messages = [
+        item for item in candidates
+        if item["kind"] == "message" and "lab-message--operator" in item["attributes"].get("class", "")
+    ]
+    assert bot_messages
+    children = bot_messages[0]["children"]
+    assert {"tag": "span", "class": "msg-sender", "selector": "span.msg-sender", "text": SENDER_NAME} in children
+    assert {"tag": "div", "class": "msg-text", "selector": "div.msg-text", "text": HELLO_REPLY} in children
+    summary = (folder / "summary.txt").read_text(encoding="utf-8")
+    print("\n--- summary.txt ---\n" + summary)
+    assert "     inside:" in summary
+    assert f'       - span.msg-sender (span, class "msg-sender"): "{SENDER_NAME}"' in summary
+    assert f'       - div.msg-text (div, class "msg-text"): "{HELLO_REPLY}"' in summary
+    assert (
+        'To leave out a sender name, set target.selectors.message_text to one of the selectors under "inside".'
+        in summary
+    )

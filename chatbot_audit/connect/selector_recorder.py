@@ -27,6 +27,10 @@ BACKGROUND_LAUNCHER = "That click was on the page background. Please click the c
 BACKGROUND_SEND = "That click was on the page background. Please click the Send button, or press Enter here."
 BACKGROUND_REPLY = "That click was on the page background. Please click the bot's reply."
 BACKGROUND_TYPING = "That click was on the page background. Please click the typing animation, or press Enter."
+NOT_A_REPLY_MESSAGE_BOX = "That is the message box, not a reply. Please click the bot's reply."
+NOT_A_REPLY_BUTTON = "That is a button, not a reply. Please click the bot's reply."
+# True if the element (the recorded Send button) contains the element the last pick-mode click landed on.
+CONTAINS_LAST_PICK_JS = "el => !!window.__auditLastPickTarget && el.contains(window.__auditLastPickTarget)"
 BROWSER_CLOSED = "The browser window was closed. Run 'audit connect' again."
 SEND_BUTTON_PROMPT = "If this chat has a Send button, click it now. If pressing Enter sends messages, press Enter here. "
 
@@ -88,6 +92,7 @@ class Pick:
     text: str
     frame: Frame
     textbox: bool = False  # the click was inside a box a customer can type into
+    control: str | None = None  # "textbox", "button" (any other button or field) or None
 
 
 class SelectorRecorder:
@@ -123,6 +128,7 @@ class SelectorRecorder:
                         payload.get("text") or "",
                         source["frame"],
                         bool(payload.get("textbox")),
+                        payload.get("control") or None,
                     )
                 )
 
@@ -255,7 +261,7 @@ class SelectorRecorder:
         await self._send_message(scope, input_locator, send_button, FIRST_MESSAGE)
         self.ui.say(f'Sent "{FIRST_MESSAGE}". Wait for the bot to answer.')
 
-        bot_message = await self._pick_bot_message(scope)
+        bot_message = await self._pick_bot_message(scope, send_button)
 
         self.ui.say(
             "If a typing animation appears while the bot replies, click it now during the next reply, "
@@ -292,10 +298,16 @@ class SelectorRecorder:
         else:
             await input_locator.press("Enter")
 
-    async def _pick_bot_message(self, scope: Page | FrameLocator) -> str:
+    async def _pick_bot_message(self, scope: Page | FrameLocator, send_button: str | None) -> str:
         while True:
             self.ui.say("Click on the bot's reply.")
             pick = await self._pick("all_similar", BACKGROUND_REPLY)
+            if pick.control == "textbox":
+                self.ui.say(NOT_A_REPLY_MESSAGE_BOX)
+                continue
+            if pick.control == "button" or await self._inside_send_button(scope, send_button):
+                self.ui.say(NOT_A_REPLY_BUTTON)
+                continue
             matches = scope.locator(pick.selector)
             texts = [text.strip() for text in await matches.all_inner_texts()]
             if not texts or not texts[-1]:
@@ -308,6 +320,17 @@ class SelectorRecorder:
             self.ui.say(f"  Last reply: {texts[-1]}")
             if await self.ui.confirm("Is this the bot's reply?"):
                 return pick.selector
+
+
+    @staticmethod
+    async def _inside_send_button(scope: Page | FrameLocator, send_button: str | None) -> bool:
+        """True if the last click was inside the recorded Send button (it may be a plain div, not a <button>)."""
+        if not send_button:
+            return False
+        try:
+            return bool(await scope.locator(send_button).first.evaluate(CONTAINS_LAST_PICK_JS, timeout=2000))
+        except PlaywrightError:
+            return False
 
 
 def browser_error_message(exc: Exception) -> str:

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget lab: Sender name</title>
+<link rel="stylesheet" href="/lab/lab.css">
+</head>
+<body class="lab-page">
+<header class="lab-intro">
+  <p><a href="/lab">Widget lab</a> (fictional Lumen Skincare)</p>
+  <h1>Sender name</h1>
+  <p>Each bot reply shows the agent's name ("Mia") above the text, inside the same message element.
+  Without <code>message_text</code> the reply is read as "Mia" plus the text.</p>
+</header>
+<script src="/lab/lab_common.js"></script>
+<script>
+var chat = LumenLab.mount(document.body);
+function render(bubble, reply) {
+  // Class names like the ones a real widget uses for agent text messages.
+  bubble.className += " lab-message--operator lab-message--text";
+  bubble.textContent = "";
+  var sender = document.createElement("span");
+  sender.className = "msg-sender";
+  sender.textContent = "Mia";
+  var text = document.createElement("div");
+  text.className = "msg-text";
+  text.textContent = reply;
+  bubble.appendChild(sender);
+  bubble.appendChild(text);
+}
+LumenLab.openOnClick(chat);
+LumenLab.onSubmit(chat, function (message) { return LumenLab.converse(chat, message, { render: render }); });
+</script>
+</body>
+</html>

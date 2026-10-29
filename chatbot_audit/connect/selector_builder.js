@@ -9,6 +9,7 @@
   var PER_ITEM_ATTRIBUTE = /(^|-)(id|index|key|time|timestamp|uuid|ts)$/i;
   var NOT_TEXT_INPUTS = /^(hidden|password|checkbox|radio|submit|button|reset|file|image|range|color)$/i;
   var TEXTBOX_CANDIDATES = "input, textarea, [contenteditable], [role='textbox']";
+  var CONTROLS = "button, input, select, textarea, [role='button']";
 
   // <html> and <body> are the page itself, never a chat element.
   function isPageRoot(element) {
@@ -188,13 +189,16 @@
     return element.tagName.toLowerCase();
   }
 
-  // mode: "unique" (one element), "all_similar" (every element like it) or "textbox" (the text box
-  // around the element, as a unique selector). Never a selector for <html> or <body>.
+  // mode: "unique" (one element), "all_similar" (every element like it), "textbox" (the text box
+  // around the element, as a unique selector) or "inner" (the element's own tag and hooks, never its
+  // parents, for use inside another element). Never a selector for <html> or <body>.
   window.__auditBuildSelector = function (element, mode) {
     if (!element || element.nodeType !== 1) return null;
     if (mode === "textbox") element = textboxOf(element);
     if (isPageRoot(element)) return null;
-    return mode === "all_similar" ? similarSelector(element) : uniqueSelector(element);
+    if (mode === "inner") return similarHooks(element) || element.tagName.toLowerCase();
+    if (mode === "all_similar") return similarSelector(element);
+    return uniqueSelector(element);
   };
 
   window.__auditIsTextbox = isTextbox;
@@ -224,6 +228,7 @@
       var target = path.length ? path[0] : event.target;
       if (target && target.nodeType !== 1) target = target.parentElement;
       if (!target) return;
+      window.__auditLastPickTarget = target;  // lets the recorder check if the click was inside an element
       if (typeof window.__auditPick === "function") {
         var box = mode === "textbox" ? textboxOf(target) : target;
         window.__auditPick({
@@ -231,6 +236,8 @@
           text: (target.innerText || "").trim().slice(0, 500),   // never a typed value
           mode: mode,
           textbox: isTextbox(box),
+          // What kind of control the click landed on: a text box, another button or field, or neither.
+          control: isTextbox(textboxOf(target)) ? "textbox" : target.closest(CONTROLS) ? "button" : null,
         });
       }
     },

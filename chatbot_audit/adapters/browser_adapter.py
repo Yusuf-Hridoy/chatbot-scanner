@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,11 @@ from playwright.async_api import Browser, BrowserContext, FrameLocator, Page, Pl
 from playwright.async_api import Error as PlaywrightError
 
 from chatbot_audit.adapters.base_adapter import AdapterError, BaseAdapter, BotReply, ConversationEvidence
-from chatbot_audit.adapters.widget_preset_loader import resolve_dismiss_selectors, resolve_selectors
+from chatbot_audit.adapters.widget_preset_loader import (
+    resolve_chat_dismiss_selectors,
+    resolve_dismiss_selectors,
+    resolve_selectors,
+)
 from chatbot_audit.data_models import BrowserTargetConfig, LimitsConfig
 
 CAPTCHA_RE = re.compile(r"recaptcha|hcaptcha|challenges\.cloudflare\.com|turnstile", re.IGNORECASE)
@@ -26,6 +31,10 @@ CAPTCHA_MESSAGE = (
 )
 CHROMIUM_MISSING = "Chromium could not be started. Install it with: playwright install chromium"
 DISMISS_WAIT_SECONDS = 2.0
+CHAT_DISMISS_CLICK_MS = 2000
+MESSAGE_TEXT_WARNING = (
+    "message_text matched nothing inside the bot messages, so the full message text was used. Check the selector."
+)
 APPEAR_POLL_SECONDS = 0.1
 SETTLE_POLL_SECONDS = 0.25
 IFRAME_SOURCES_JS = "() => Array.from(document.querySelectorAll('iframe')).map(f => f.getAttribute('src') || '')"
@@ -41,23 +50,27 @@ AREA_SCREENSHOT_TIMEOUT_MS = 5000
 # Bot messages already on the page before a send get this mark; a new message is one without it.
 SEEN_ATTRIBUTE = "data-audit-seen"
 MARK_SEEN_JS = "(elements, mark) => elements.forEach(el => el.setAttribute(mark, '1'))"
-# [already seen?, text, button labels] per bot message. Buttons inside a bubble (quick replies) are kept
-# apart from the text, and an element inside another matched element is skipped (a selector list can match both).
-READ_BUBBLES_JS = r"""(elements, mark) => elements.filter(
-  el => !elements.some(other => other !== el && other.contains(el))
-).map(el => {
-  const controls = Array.from(el.querySelectorAll("button, [role='button']"));
-  let text = el.innerText;
-  if (controls.length) {
-    const copy = el.cloneNode(true);
+# [already seen?, text, button labels, fell back?] per bot message. Buttons inside a bubble (quick replies) are
+# kept apart from the text, and an element inside another matched element is skipped (a selector list can match
+# both). With a message_text selector the text comes only from its matches inside the bubble; if nothing matches,
+# the whole bubble is used and "fell back?" is true.
+READ_BUBBLES_JS = r"""(elements, [mark, textSelector]) => {
+  const outermost = (nodes) => nodes.filter(node => !nodes.some(other => other !== node && other.contains(node)));
+  const textOf = (node) => {
+    if (!node.querySelector("button, [role='button']")) return (node.innerText || "").trim();
+    const copy = node.cloneNode(true);
     copy.querySelectorAll("button, [role='button']").forEach(button => button.remove());
-    text = copy.textContent.replace(/\s+/g, " ");
-  }
-  const labels = controls
-    .map(button => (button.innerText || button.textContent || "").replace(/\s+/g, " ").trim())
-    .filter(label => label);
-  return [el.hasAttribute(mark), (text || "").trim(), labels];
-})"""
+    return copy.textContent.replace(/\s+/g, " ").trim();
+  };
+  return outermost(elements).map(el => {
+    const parts = textSelector ? outermost(Array.from(el.querySelectorAll(textSelector))) : [];
+    const text = (parts.length ? parts : [el]).map(textOf).filter(part => part).join("\n");
+    const labels = Array.from(el.querySelectorAll("button, [role='button']"))
+      .map(button => (button.innerText || button.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(label => label);
+    return [el.hasAttribute(mark), text, labels, Boolean(textSelector) && !parts.length];
+  });
+}"""
 
 Scope = Page | FrameLocator
 
@@ -84,9 +97,12 @@ class BrowserAdapter(BaseAdapter):
         self.timeout = limits.timeout_seconds
         self.selectors = resolve_selectors(target)
         self.dismiss_selectors = resolve_dismiss_selectors(target)
+        self.chat_dismiss_selectors = resolve_chat_dismiss_selectors(target)
         self.ignore_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in target.ignore_text_patterns]
         self.debug_dir: Path | None = None      # set by `audit check`: where a failure saves its debug folder
         self.debug_folder: Path | None = None   # the debug folder once it is written
+        self.echo: Callable[[str], None] = print  # where warnings go; set by `audit check` and `audit run`
+        self._warned_message_text = False
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._launch_lock = asyncio.Lock()
@@ -269,6 +285,7 @@ class BrowserAdapter(BaseAdapter):
     async def _send(self, conversation: _Conversation, message: str) -> BotReply:
         scope = conversation.scope
         bot_messages = scope.locator(self.selectors.bot_message)
+        await self._close_chat_popups(conversation)
         try:
             await bot_messages.evaluate_all(MARK_SEEN_JS, SEEN_ATTRIBUTE)
             input_locator = scope.locator(self.selectors.input).first
@@ -295,29 +312,53 @@ class BrowserAdapter(BaseAdapter):
                 selector=self.selectors.bot_message,
             ) from exc
 
+    async def _close_chat_popups(self, conversation: _Conversation) -> None:
+        """Click every chat_dismiss_selectors element that is visible right now. Never waits for one to appear."""
+        scopes: list[Scope] = [conversation.scope]
+        if conversation.scope is not conversation.page:
+            scopes.append(conversation.page)  # the pop-up may be outside the chat iframe
+        for selector in self.chat_dismiss_selectors:
+            for scope in scopes:
+                popup = scope.locator(selector).filter(visible=True).first
+                try:
+                    if await popup.count():
+                        await popup.click(timeout=CHAT_DISMISS_CLICK_MS)
+                except PlaywrightError:
+                    pass  # invalid selector or the pop-up went away: carry on with the send
+
     def _ignored(self, text: str) -> bool:
         """True if the whole bubble text matches an ignore_text_patterns entry."""
         text = text.strip()
         return any(pattern.fullmatch(text) for pattern in self.ignore_patterns)
 
-    async def _new_bot_messages(self, bot_messages: Any) -> tuple[list[str], list[str], int]:
+    async def _new_bot_messages(self, bot_messages: Any) -> tuple[list[str], list[str], int, bool]:
         """Texts and button labels of bot messages that were not on the page before this send
-        (minus ignored ones), and how many new message elements there are in total."""
-        bubbles = await bot_messages.evaluate_all(READ_BUBBLES_JS, SEEN_ATTRIBUTE)
-        new = [(text, labels) for seen, text, labels in bubbles if not seen]
-        kept = [(text, labels) for text, labels in new if (text or labels) and not self._ignored(text)]
-        texts = [text for text, _ in kept if text]
-        buttons = [label for _, labels in kept for label in labels]
-        return texts, buttons, len(new)
+        (minus ignored ones), how many new message elements there are in total, and whether
+        message_text matched nothing in a kept message (so its full text was used)."""
+        bubbles = await bot_messages.evaluate_all(
+            READ_BUBBLES_JS, [SEEN_ATTRIBUTE, self.selectors.message_text]
+        )
+        new = [(text, labels, fell_back) for seen, text, labels, fell_back in bubbles if not seen]
+        kept = [item for item in new if (item[0] or item[1]) and not self._ignored(item[0])]
+        texts = [text for text, _, _ in kept if text]
+        buttons = [label for _, labels, _ in kept for label in labels]
+        return texts, buttons, len(new), any(fell_back for _, _, fell_back in kept)
+
+    def _warn_message_text_fallback(self) -> None:
+        """Print the message_text warning once per adapter (one run or one check)."""
+        if not self._warned_message_text:
+            self._warned_message_text = True
+            self.echo(MESSAGE_TEXT_WARNING)
 
     async def _read_reply(self, scope: Scope, bot_messages: Any, submitted: float) -> BotReply:
         """Wait for new bot messages, the typing indicator to go away, and the text to settle."""
         deadline = submitted + self.timeout
         timeout_error = AdapterError(
-            f"The bot did not reply within {self.timeout:g} seconds.",
+            f"No reply was seen within {self.timeout:g} seconds.",
             retryable=True,
             step="reply",
             selector=self.selectors.bot_message,
+            no_reply=True,
         )
 
         while not (await self._new_bot_messages(bot_messages))[0]:
@@ -334,7 +375,7 @@ class BrowserAdapter(BaseAdapter):
         settle_seconds = self.target.reply_settle_ms / 1000
         last_text, last_buttons, last_count, stable_since = "", [], -1, time.monotonic()
         while True:
-            texts, buttons, count = await self._new_bot_messages(bot_messages)
+            texts, buttons, count, fell_back = await self._new_bot_messages(bot_messages)
             text = "\n".join(texts)
             now = time.monotonic()
             if text != last_text or buttons != last_buttons or count != last_count:
@@ -346,6 +387,8 @@ class BrowserAdapter(BaseAdapter):
                     break  # partial reply: keep what arrived rather than failing
                 raise timeout_error
             await asyncio.sleep(SETTLE_POLL_SECONDS)
+        if fell_back:
+            self._warn_message_text_fallback()
         return BotReply(text=last_text.strip(), latency_ms=latency_ms, buttons=last_buttons)
 
     # ------------------------------------------------------------ audit check debug folder

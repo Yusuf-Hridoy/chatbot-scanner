@@ -74,7 +74,9 @@ page in Chromium, accepts the cookie banner, opens the chat, types each attack m
 reply once it stops changing. Every conversation gets a fresh browser session.
 
 1. **Pick a preset.** `audit presets` lists them. `generic` is tested and works for many simple custom
-   widgets. `intercom`, `tidio` and `crisp` are best-effort and marked UNVERIFIED.
+   widgets. `intercom` and `tidio` are best-effort and marked UNVERIFIED. `crisp` is also marked
+   UNVERIFIED: its message box and bot message selectors worked on a real Crisp widget, but sender names
+   still need one real check (see `message_text` below).
    ```yaml
    target:
      type: browser
@@ -96,7 +98,9 @@ Try it on the demo website: `audit demo-bot`, then
 `audit full --config examples/demo_client/client_config_browser.yaml --pdf`. The site is at
 http://127.0.0.1:8765/ (`?frame=0` shows the chat without an iframe, `?captcha=1` adds a fake CAPTCHA).
 
-Other browser options: `dismiss_selectors` (extra overlays to click away), `reply_settle_ms` (how long the
+Other browser options: `dismiss_selectors` (extra overlays to click away after the page loads),
+`chat_dismiss_selectors` (pop-ups inside the chat, such as an email form, to click away before every
+message; only the ones visible at that moment are clicked), `reply_settle_ms` (how long the
 reply text must stay unchanged, default 1500), `page_load_timeout_seconds` (how long to wait for the page
 and for the chat to show up, default 30), `headless`, `record_video`, `viewport`, and
 `storage_state_file` (see Safety rules). The reply timeout is `limits.timeout_seconds`.
@@ -110,6 +114,11 @@ How replies are read:
 - Buttons inside a bot message (quick replies) are kept apart from the reply text. Their labels are
   saved with the reply, every rule check reads them too, and the report shows them as small grey
   labels under the bot's message. So a code on a button (for example "Get code SORRY50") is a finding.
+- Some widgets put the agent's name inside the bot message, so the reply reads "Mia" and then the text.
+  Set `selectors.message_text` to a plain CSS selector for the text inside each bot message, and only
+  that text is read. If it matches nothing inside a bot message, the full message text is used and the
+  run prints one warning: *"message_text matched nothing inside the bot messages, so the full message
+  text was used. Check the selector."* The debug folder (below) shows what is inside each message.
 - `ignore_text_patterns` (under `target:`) lists bot messages to skip, as regular expressions (not
   case-sensitive). A message is skipped only when its whole text matches a pattern, so a real reply
   that just mentions the same words is still checked. The defaults skip "…" placeholders and short
@@ -131,15 +140,17 @@ When `audit check` fails on a website chat, it saves a `check_debug/` folder nex
 - `page.png`: a screenshot of the whole page.
 - `frames.json`: every frame on the page, with the selector of its iframe.
 - `candidates.json`: elements that look like a chat launcher, message box or bot message, in every frame
-  and shadow root.
+  and shadow root. Each bot message also lists the elements inside it (tag, class, a suggested selector
+  and the first 60 characters of text), to help you pick `message_text`.
 - `summary.txt`: which step failed (page load, launcher, input or reply), the selector that was used,
-  and the 3 most likely elements to use instead.
+  and the 3 most likely elements to use instead, with an "inside:" list under each bot message.
 
 It never holds cookies, stored data or text typed into the page. Send this folder to your reviewer to
 fix the selectors.
 
 While `audit check` waits for a reply, it prints a short note every 10 seconds, so you know it is still
-working (useful when you reply by hand from a chat inbox).
+working (useful when you reply by hand from a chat inbox). If nothing arrives within
+`limits.timeout_seconds`, it says *"No reply was seen within N seconds."*
 
 ### Widget lab
 
@@ -147,7 +158,8 @@ Real chat widgets are messier than the demo shop. The widget lab is a set of sma
 the hard patterns real widgets use: shadow DOM, a chat iframe from another origin, welcome messages,
 "leave your email" bubbles, lists that drop old messages, "…" placeholders, a contenteditable message
 box, a launcher that loads late, a launcher that is a plain div, Enter that does not send, quick reply
-buttons and a slow first reply.
+buttons, a slow first reply, a sender name inside the bot message and an email form that covers the
+message box.
 
 Start the demo bot (`audit demo-bot`) and open http://127.0.0.1:8765/lab to see them. Each page has a
 config in `examples/widget_lab/`, for example:
@@ -184,6 +196,9 @@ click is recorded instead of acting on the page.
    Enter. Then the tool types "Hello" and sends it the same way.
 6. *"Click on the bot's reply."* The tool turns your click into a selector that matches every bot
    message, shows the matched reply text and asks *"Is this the bot's reply? [Y/n]"*. Answer `n` to try again.
+   A click on the message box, the Send button or any other button or field is not recorded: the tool
+   says *"That is the message box, not a reply. Please click the bot's reply."* (or *"That is a button,
+   not a reply. Please click the bot's reply."*) and asks again.
 7. *"If a typing animation appears while the bot replies, click it now during the next reply, or press
    Enter to skip."* The tool sends "What can you help with?". Click the animation quickly, or press Enter.
 8. The `target:` block is printed and saved to `--out` (default `./target_recorded.yaml`). Paste it
